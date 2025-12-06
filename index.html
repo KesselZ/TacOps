@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TacOps</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; user-select: none; }
+        #game-container { position: relative; width: 100vw; height: 100vh; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #debug-panel { position:absolute; top:10px; right:10px; padding:6px 10px; background:rgba(0,0,0,0.6); color:#0f0; font-size:12px; line-height:1.4; pointer-events:none; white-space:pre; text-align:right; }
+        
+        /* 准星 */
+        #crosshair-wrapper {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 0; height: 0; overflow: visible; transition: opacity 0.1s;
+        }
+        .ch-part { 
+            position: absolute; 
+            background-color: rgba(255, 255, 255, 1.0); 
+            box-shadow: 0 0 3px rgba(0,0,0,0.8); 
+            border: none;
+            /* 无CSS过渡，由JS每帧驱动以保证物理同步 */
+        }
+        
+        /* 准星线条加粗一点点 */
+        .ch-line-h { top: -1px; height: 2px; width: 10px; }
+        .ch-line-v { left: -1px; width: 2px; height: 10px; }
+        
+        /* 初始位置 (由JS控制位移) */
+        .ch-l { left: 0; transform-origin: right center; } 
+        .ch-r { right: 0; transform-origin: left center; } 
+        .ch-t { top: 0; transform-origin: center bottom; } 
+        .ch-b { bottom: 0; transform-origin: center top; }
+
+        /* 击中反馈 - COD风格：带空隙的 X 形 */
+        #hit-feedback { position: absolute; top: 50%; left: 50%; width: 0; height: 0; opacity: 0; pointer-events: none; }
+        .hit-line {
+            position: absolute;
+            width: 14px;
+            height: 2.5px;
+            background: white;
+            box-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(255,255,255,0.3);
+        }
+        /* 四个短斜线臂，中心留空 */
+        #hit-tl { left: -18px; top: -18px; transform: rotate(45deg); }
+        #hit-tr { left: 4px; top: -18px; transform: rotate(-45deg); }
+        #hit-bl { left: -18px; top: 4px; transform: rotate(-45deg); }
+        #hit-br { left: 4px; top: 4px; transform: rotate(45deg); }
+        @keyframes hit-anim { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.5); } }
+        @keyframes hit-anim-headshot { 0% { opacity: 1; transform: scale(1) rotate(0deg); } 50% { transform: scale(1.3) rotate(5deg); } 100% { opacity: 0; transform: scale(1.8) rotate(0deg); } }
+
+        #damage-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, transparent 50%, rgba(180, 0, 0, 0.4) 90%, rgba(220, 0, 0, 0.7) 100%);
+            opacity: 0; transition: opacity 0.1s; pointer-events: none; mix-blend-mode: overlay;
+        }
+
+        /* UI */
+        #stats-bar { position: absolute; bottom: 0; left: 0; width: 100%; padding: 40px; box-sizing: border-box; display: flex; justify-content: space-between; align-items: flex-end; color: #fff; text-shadow: 2px 2px 0 #000; }
+        .stat-group { display: flex; flex-direction: column; }
+        .ammo-count { font-size: 4rem; font-weight: 900; line-height: 1; font-family: 'Impact', sans-serif; letter-spacing: 2px; }
+        .ammo-total { font-size: 1.5rem; color: #ddd; font-weight: bold; }
+        #kill-feed { position: absolute; top: 100px; right: 30px; text-align: right; display: flex; flex-direction: column; gap: 5px; }
+        .kill-msg { background: linear-gradient(90deg, transparent, rgba(0,0,0,0.8)); padding: 8px 20px; color: white; font-weight: bold; font-family: monospace; border-right: 4px solid #eab308; animation: fadeOut 4s forwards; }
+        .headshot-text { color: #ff3333; font-size: 1.2em; margin-right: 5px; }
+        @keyframes fadeOut { 0% { opacity: 1; transform: translateX(0); } 80% { opacity: 1; } 100% { opacity: 0; transform: translateX(50px); } }
+        
+        #reload-indicator { position: absolute; top: 60%; left: 50%; transform: translate(-50%, -50%); border: 3px solid rgba(255,255,255,0.2); border-top: 3px solid #eab308; border-radius: 50%; width: 50px; height: 50px; animation: spin 0.8s linear infinite; display: none; }
+        @keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+
+        #menu-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%); background-image: url('data:image/svg+xml,%3Csvg width="60" height="60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="%23ffffff" fill-opacity="0.02"%3E%3Cpath d="M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4z"/%3E%3C/g%3E%3C/svg%3E'); display: flex; flex-direction: column; justify-content: space-between; align-items: stretch; color: white; z-index: 10; padding: 40px 60px; box-sizing: border-box; }
+        .btn { background: #eab308; color: #000; border: none; padding: 15px 48px; font-size: 1.6rem; font-weight: 900; cursor: pointer; transform: skewX(-10deg); transition: all 0.1s; box-shadow: 0 0 20px rgba(234, 179, 8, 0.3); }
+        .btn:hover { transform: skewX(-10deg) scale(1.05); background: #fff; box-shadow: 0 0 40px rgba(255, 255, 255, 0.5); }
+        .controls-hint { margin-top: 40px; color: #888; font-family: monospace; text-align: center; line-height: 2; font-size: 1.1rem; }
+        .key { border: 1px solid #444; padding: 2px 8px; border-radius: 4px; color: #eee; background: #222; font-weight: bold; }
+        #weapon-select { margin-top: 10px; }
+        .menu-top { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; width: 100%; margin: 0 auto 20px; }
+        .menu-brand { display: flex; flex-direction: column; gap: 6px; }
+        .menu-title { font-size: 2.4rem; font-style: italic; font-weight: 900; letter-spacing: -1px; text-shadow: 0 0 18px rgba(255,255,255,0.1); }
+        .menu-title span { color: #eab308; }
+        .menu-subtitle { color: #666; letter-spacing: 4px; text-transform: uppercase; font-size: 0.9rem; }
+        .menu-main { display: flex; justify-content: space-between; align-items: stretch; gap: 40px; max-width: 1200px; width: 100%; margin: 0 auto; }
+        .weapon-select-row { display: flex; gap: 24px; width: 100%; }
+        .weapon-option { flex: 1; background: radial-gradient(circle at top left, #1f2937 0, #020617 55%); border: 1px solid #374151; padding: 18px 20px; color: #eee; font-weight: 700; font-size: 0.95rem; cursor: pointer; min-height: 260px; pointer-events: auto; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; box-shadow: 0 0 32px rgba(0,0,0,0.7); text-align: left; }
+        .weapon-option-active { border-color: #eab308; box-shadow: 0 0 28px rgba(234,179,8,0.45); }
+        .weapon-name { letter-spacing: 3px; font-size: 1.2rem; }
+        .weapon-meta { font-size: 0.85rem; color: #aaa; margin-top: 6px; max-width: 220px; }
+        .weapon-tag { font-size: 0.75rem; color: #9ca3af; text-transform: uppercase; letter-spacing: 2px; }
+        .weapon-stats { font-size: 0.8rem; color: #9ca3af; }
+        .weapon-stats-row { display: flex; gap: 12px; margin-top: 8px; }
+        .weapon-stat-label { color: #6b7280; text-transform: uppercase; letter-spacing: 1px; font-size: 0.72rem; }
+        .weapon-stat-value { color: #e5e7eb; font-weight: 600; }
+        .menu-controls { width: 260px; display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; text-align: left; }
+        .menu-controls .controls-hint { margin-top: 0; text-align: left; }
+
+        #pause-overlay { position:absolute; top:0; left:0; width:100%; height:100%; background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%); background-image: url('data:image/svg+xml,%3Csvg width="60" height="60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="%23ffffff" fill-opacity="0.02"%3E%3Cpath d="M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4z"/%3E%3C/g%3E%3C/svg%3E'); display:none; align-items:center; justify-content:center; z-index:50; backdrop-filter: blur(5px); }
+        .pause-menu { background: linear-gradient(135deg, rgba(30,30,30,0.9), rgba(20,20,20,0.9)); border: 1px solid #333; border-left-width: 4px; border-left-color: #eab308; padding:40px 60px; border-radius:8px; box-shadow:0 0 40px rgba(0,0,0,0.8); min-width:400px; text-align:center; }
+        .pause-title { font-size:2.4rem; font-weight:900; margin-bottom:24px; letter-spacing:4px; text-transform: uppercase; color: #eab308; text-shadow: 0 0 20px rgba(234,179,8,0.3); }
+        .pause-options { display:flex; flex-direction:column; gap:16px; margin-top:16px; margin-bottom:24px; }
+        .pause-option { 
+            background: transparent; 
+            border: 1px solid #444; 
+            color: #9ca3af; 
+            padding: 15px 32px; 
+            font-size: 1.2rem; 
+            font-weight: 700; 
+            text-transform: uppercase; 
+            cursor: pointer; 
+            transition: all 0.08s; 
+            box-shadow: 0 0 20px rgba(234, 179, 8, 0.3); 
+            border-radius: 6px;
+        }
+        .pause-option:hover { 
+            border-color: #eab308; 
+            color: #eab308; 
+            background: rgba(234, 179, 8, 0.1); 
+            box-shadow: 0 0 25px rgba(234, 179, 8, 0.6); 
+            transform: translateY(-1px);
+        }
+
+        /* Info buttons styling */
+        .stash-stats {
+            position: relative;
+        }
+        
+        .info-buttons {
+            position: absolute;
+            bottom: 5px;
+            right: 5px;
+            display: flex;
+            gap: 6px;
+            z-index: 15;
+        }
+        
+        .info-btn {
+            background: linear-gradient(135deg, rgba(30,30,30,0.9), rgba(20,20,20,0.9));
+            border: 1px solid #374151;
+            border-left: 2px solid #eab308;
+            color: #eab308;
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .info-btn:hover {
+            background: linear-gradient(135deg, rgba(35,35,35,0.95), rgba(25,25,25,0.95));
+            border-color: #eab308;
+            transform: scale(1.05);
+            box-shadow: 0 0 18px rgba(234,179,8,0.4);
+        }
+        
+        .info-btn-icon {
+            font-size: 22px;
+            filter: drop-shadow(0 0 2px rgba(234,179,8,0.5));
+        }
+
+        /* 伤害数字样式 */
+        .damage-number {
+            position: absolute;
+            font-weight: 900;
+            font-family: 'Impact', sans-serif;
+            text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+            pointer-events: none;
+            z-index: 1000;
+            white-space: nowrap;
+            transform-origin: center;
+        }
+        
+        .damage-number.headshot {
+            color: #ff3333;
+            font-size: 2.5rem;
+        }
+        
+        .damage-number.critical {
+            color: #ff9500;
+            font-size: 2rem;
+        }
+        
+        .damage-number.bodyshot {
+            color: #ffffff;
+            font-size: 1.5rem;
+        }
+
+        /* 设置按钮样式 */
+        .settings-btn {
+            padding: 12px 32px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            cursor: pointer;
+            border: 2px solid;
+            border-radius: 8px;
+            transition: all 0.2s;
+            min-width: 120px;
+        }
+
+        .settings-btn-apply {
+            background: #eab308;
+            color: #000;
+            border-color: #eab308;
+        }
+
+        .settings-btn-apply:hover {
+            background: #fff;
+            border-color: #fff;
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(234, 179, 8, 0.5);
+        }
+
+        .settings-btn-cancel {
+            background: transparent;
+            color: #9ca3af;
+            border-color: #444;
+        }
+
+        .settings-btn-cancel:hover {
+            background: #374151;
+            color: #fff;
+            border-color: #9ca3af;
+            transform: scale(1.05);
+        }
+
+        /* --- NEW SETTINGS UI STYLES --- */
+        .settings-menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #0a0a0a;
+            width: 700px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #333;
+            box-shadow: 0 0 60px rgba(0,0,0,0.9);
+            border-radius: 8px;
+            overflow: hidden;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        .settings-header {
+            padding: 25px 35px;
+            background: #111;
+            border-bottom: 1px solid #2a2a2a;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .settings-title {
+            font-size: 1.8rem;
+            font-weight: 900;
+            color: #eab308;
+            letter-spacing: 3px;
+            margin: 0;
+            text-transform: uppercase;
+            text-shadow: 0 0 20px rgba(234, 179, 8, 0.2);
+        }
+
+        .settings-content {
+            padding: 35px;
+            overflow-y: auto;
+            flex: 1;
+            background: radial-gradient(circle at top right, #1a1a1a 0%, #050505 100%);
+        }
+
+        .settings-section {
+            margin-bottom: 35px;
+        }
+        
+        .settings-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .section-title {
+            font-size: 0.85rem;
+            color: #555;
+            border-bottom: 1px solid #2a2a2a;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 5px 0;
+        }
+
+        .setting-label {
+            color: #e5e5e5;
+            font-weight: 600;
+            font-size: 1.05rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .setting-desc {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-top: 6px;
+            font-weight: 400;
+        }
+
+        .setting-control {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            width: 240px;
+            justify-content: flex-end;
+        }
+
+        /* Custom Inputs */
+        .t-select {
+            background: #1f2937;
+            color: #f3f4f6;
+            border: 1px solid #374151;
+            padding: 10px 16px;
+            border-radius: 6px;
+            width: 100%;
+            cursor: pointer;
+            outline: none;
+            font-family: inherit;
+            font-size: 0.95rem;
+            transition: all 0.2s;
+        }
+
+        .t-select:hover {
+            border-color: #4b5563;
+            background: #2d3748;
+        }
+
+        .t-select:focus {
+            border-color: #eab308;
+            box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.2);
+        }
+
+        .t-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            background: #374151;
+            border-radius: 3px;
+            outline: none;
+        }
+
+        .t-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #eab308;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: transform 0.1s, box-shadow 0.1s;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+
+        .t-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            box-shadow: 0 0 15px rgba(234, 179, 8, 0.4);
+        }
+
+        .value-display {
+            color: #eab308;
+            font-weight: 800;
+            min-width: 40px;
+            text-align: right;
+            font-family: monospace;
+            font-size: 1.1rem;
+        }
+
+        /* Toggle Switch */
+        .t-switch {
+            position: relative;
+            display: inline-block;
+            width: 46px;
+            height: 24px;
+        }
+
+        .t-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #374151;
+            transition: .3s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #eab308;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(22px);
+            background-color: #000;
+        }
+
+        .settings-footer {
+            padding: 25px 35px;
+            background: #111;
+            border-top: 1px solid #2a2a2a;
+            display: flex;
+            justify-content: flex-end;
+            gap: 16px;
+        }
+        
+        /* Overriding old button styles for specific buttons */
+        #settings-apply-btn, #settings-cancel-btn {
+            min-width: 140px;
+            letter-spacing: 1px;
+        }
+
+    </style>
+    
+    <link rel="stylesheet" href="styles/stash.css">
+    <link rel="stylesheet" href="styles/backpack.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.128.0/build/three.module.js",
+                "three/": "https://unpkg.com/three@0.128.0/",
+                "postprocessing": "https://unpkg.com/postprocessing@6.21.5/build/postprocessing.esm.js"
+            }
+        }
+    </script>
+</head>
+<body class="loading-active">
+
+    <div id="game-container">
+    <div id="global-loading-overlay">
+        <div class="global-loading-spinner"></div>
+        <div class="global-loading-text" id="global-loading-text">LOADING...</div>
+        <div class="global-loading-subtext" id="global-loading-subtext">Preparing tactical environment</div>
+    </div>
+    <div id="damage-overlay"></div>
+    <div id="ui-layer">
+        <div style="position:absolute; top:30px; left:30px;">
+            <div style="font-size: 1rem; color:#888; letter-spacing:4px; font-weight:bold;">MISSION SCORE</div>
+            <div style="display:flex; align-items:baseline; gap:10px;">
+                <div id="score" style="font-size: 3rem; font-weight:900; color:#eab308; text-shadow: 2px 2px 0 #000;">0</div>
+                <div id="score-bonus" style="font-size: 3rem; font-weight:900; color:#22c55e; letter-spacing:0.5px; text-shadow: 2px 2px 0 #000; opacity:0; transform:translateY(8px) scale(1); transition: opacity 0.1s ease-out, transform 0.1s ease-out;"></div>
+            </div>
+        </div>
+        <div id="kill-feed"></div>
+        <div id="crosshair-wrapper">
+            <div class="ch-part ch-line-h ch-l" id="ch-l"></div>
+            <div class="ch-part ch-line-h ch-r" id="ch-r"></div>
+            <div class="ch-part ch-line-v ch-t" id="ch-t"></div>
+            <div class="ch-part ch-line-v ch-b" id="ch-b"></div>
+        </div>
+        <div id="hit-feedback">
+            <div class="hit-line" id="hit-tl"></div>
+            <div class="hit-line" id="hit-tr"></div>
+            <div class="hit-line" id="hit-bl"></div>
+            <div class="hit-line" id="hit-br"></div>
+        </div>
+        <div id="reload-indicator"></div>
+        <div id="debug-panel"></div>
+        <div id="stats-bar">
+            <div class="stat-group">
+                <span style="font-size:1rem; color:#10b981; font-weight:900;">&hearts; 生命值</span>
+
+                <span id="health-val" style="font-size:2.5rem; font-weight:bold;">100</span>
+            </div>
+            <div class="stat-group">
+                <span style="font-size:1rem; color:#3b82f6; font-weight:900;">&#x1F6E1; 护甲</span>
+
+                <span id="armor-val" style="font-size:2.5rem; font-weight:bold; color:#3b82f6;">0</span>
+            </div>
+            <div class="stat-group">
+                <span style="font-size:1rem; color:#eab308; font-weight:900;">弹药</span>
+                <div><span id="ammo-current" class="ammo-count">30</span><span class="ammo-total" id="ammo-total">/ 120</span></div>
+            </div>
+            <div class="stat-group">
+                <span style="font-size:0.8rem; color:#00ff00; font-weight:700;">医疗包 [4]</span>
+                <span id="medkit-val" style="font-size:1.5rem; font-weight:bold; color:#00ff00;">200</span>
+            </div>
+            <div class="stat-group">
+                <span style="font-size:0.8rem; color:#00ccff; font-weight:700;">护甲包 [5]</span>
+                <span id="armorkit-val" style="font-size:1.5rem; font-weight:bold; color:#00ccff;">200</span>
+            </div>
+            <!-- 原 WEIGHT stat-group 已移除 -->
+        </div>
+        
+    </div>
+    
+    <!-- 伤害数字容器 -->
+    <div id="damage-numbers-container" style="position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:1000;"></div>
+    
+    <div id="pause-overlay">
+        <div class="pause-menu">
+            <div class="pause-title">暂停</div>
+            <div class="pause-options">
+                <div class="pause-option" id="pause-opt-continue">继续游戏</div>
+                <div class="pause-option" id="pause-opt-settings">游戏设置</div>
+                <div class="pause-option" id="pause-opt-exit">返回菜单</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 医疗读条UI -->
+    <div id="medical-progress" style="display:none; position:fixed; bottom:150px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.8); padding:20px; border-radius:10px; border:2px solid #fff; min-width:300px;">
+        <div id="medical-text" style="color:#fff; font-size:18px; font-weight:bold; text-align:center; margin-bottom:10px;">使用中...</div>
+        <div style="width:100%; height:20px; background:#333; border-radius:10px; overflow:hidden;">
+            <div id="medical-bar" style="width:0%; height:100%; background:linear-gradient(90deg, #00ff00, #00cc00); transition:width 0.1s;"></div>
+        </div>
+    </div>
+
+    <!-- 部署缓冲界面 -->
+    <div id="deploy-loading-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:999999; align-items:center; justify-content:center; pointer-events:auto;">
+        <div style="text-align:center;">
+            <div class="deploy-loading-spinner" style="width:60px; height:60px; border:4px solid #333; border-top:4px solid #eab308; border-radius:50%; animation:spin 1s linear infinite; margin:0 auto 20px;"></div>
+            <div id="deploy-loading-text" style="color:#fff; font-size:18px; font-weight:bold;">部署中...</div>
+        </div>
+    </div>
+
+    <div id="stash-overlay">
+        <div class="stash-toolbar">
+            <div>
+                <div class="stash-title">TACTICAL OPS - STASH</div>
+                <div class="stash-player-name" id="player-name-label">Player</div>
+            </div>
+            <div class="stash-stats">
+                <div class="stat-item" id="weight-stat" style="display:none;">
+                    <span class="stat-label">负重</span>
+                    <div class="weight-content">
+                        <span class="stat-value" id="total-weight"></span>
+
+                        <span class="stat-bonus" id="weight-bonus"></span>
+                    </div>
+                </div>
+                <div class="stat-item currency-item">
+                    <span class="stat-label">信用点</span>
+                    <div class="currency-content">
+                        <span class="stat-value" id="currency-val">0</span>
+                        <span class="stat-cost" id="equipment-cost"></span>
+                    </div>
+                </div>
+                
+                <!-- 部署区域容器 -->
+                <div style="display: flex; align-items: center; position: relative;">
+                    <button id="deploy-btn">开始行动</button>
+                    
+                    <!-- 难度选择器 -->
+                    <div id="map-selector-btn" title="选择难度">
+                        ▼
+                    </div>
+                    
+                    <!-- 难度选择菜单 -->
+                    <div id="map-selection-menu">
+                        <div class="map-selector-header">行动难度</div>
+                        
+                        <div class="map-option selected" data-difficulty="normal">
+                            <div class="map-thumb" style="color: #4ade80; border-color: #4ade80;">&#x1F7E2;</div>
+                            <div class="map-info">
+                                <div class="map-name" style="color: #4ade80;">普通</div>
+                                <div class="map-cost">战备需求: 0</div>
+                            </div>
+                        </div>
+                        
+                        <div class="map-option" data-difficulty="hard">
+                            <div class="map-thumb" style="color: #8b5cf6; border-color: #8b5cf6;">&#x1F7E3;</div>
+                            <div class="map-info">
+                                <div class="map-name" style="color: #8b5cf6;">困难</div>
+                                <div class="map-cost">战备需求: 1500</div>
+                            </div>
+                        </div>
+                        
+                        <div class="map-option" data-difficulty="insane">
+                            <div class="map-thumb" style="color: #ef4444; border-color: #ef4444;">&#x1F480;</div>
+                            <div class="map-info">
+                                <div class="map-name" style="color: #ef4444;">疯狂</div>
+                                <div class="map-cost">战备需求: 4000</div>
+                            </div>
+                        </div>
+                        <div class="map-option map-option-challenge" data-difficulty="challenge">
+                            <div class="map-thumb" style="color: #0ea5e9; border-color: #0ea5e9;">&#x1F535;</div>
+                            <div class="map-info">
+                                <div class="map-name" style="color: #0ea5e9;">挑战模式</div>
+                                <div class="map-cost">强化敌人，奖励更高</div>
+                            </div>
+                        </div>
+                        <div class="map-option map-option-mp" data-mode="multiplayer" style="display:none;">
+                            <div class="map-thumb" style="color: #22c55e; border-color: #22c55e;">&#x1F7E2;</div>
+                            <div class="map-info">
+                                <div class="map-name" style="color: #22c55e;">联机 Beta</div>
+                                <div class="map-cost">最简单联机测试模式</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+            </div>
+        </div>
+        <div class="stash-main">
+            <div class="stash-left">
+                <div class="stash-filters">
+                    <button class="type-filter-btn active" data-type="all">全部</button>
+                    <button class="type-filter-btn" data-type="weapon">武器</button>
+                    <button class="type-filter-btn" data-type="armor">装甲</button>
+                    <button class="type-filter-btn" data-type="bag">背包</button>
+                    <button class="type-filter-btn" data-type="ammoGrade">弹药</button>
+                </div>
+                <div id="stash-grid"></div>
+            </div>
+            <div class="stash-right">
+                <div class="equipment-panel">
+                    <div class="equipment-title-row">
+                        <div class="equipment-title">装备</div>
+                        <button class="clear-loadout-btn" id="clear-loadout-btn" title="清空所有装备">🗑️</button>
+                    </div>
+                    <div class="equipment-slots-grid">
+                        <div class="equip-slot equip-slot-large" id="equip-slot-primary"></div>
+                        <div class="equip-slot equip-slot-large equip-slot-ammo" id="equip-slot-ammoGrade"></div>
+                        <div class="equip-slot" id="equip-slot-armor"></div>
+                        <div class="equip-slot" id="equip-slot-backpack"></div>
+                    </div>
+                </div>
+                <div id="item-details-panel"></div>
+                <!-- Info area buttons -->
+                <div class="info-buttons">
+                    <button class="info-btn" id="info-btn-personal" title="个人信息">
+                        <span class="info-btn-icon">&#x1F464;</span>
+                    </button>
+                    <button class="info-btn" id="info-btn-leaderboard" title="排行榜">
+                        <span class="info-btn-icon">&#x1F3C6;</span>
+                    </button>
+                    <button class="info-btn" id="info-btn-changelog" title="更新日志">
+                        <span class="info-btn-icon">&#x1F4D6;</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Backpack UI -->
+    <div id="backpack-overlay" style="display:none;">
+        <div class="backpack-container" id="player-backpack-container">
+
+            <div class="backpack-header">战术背包</div>
+            <div class="backpack-content">
+                <div class="backpack-left">
+                    <div class="bp-section-title">已装备</div>
+                    <div class="bp-equip-grid">
+                        <div class="bp-slot" id="bp-slot-primary">
+                            <div class="bp-slot-icon">🔫</div>
+                            <div class="bp-slot-info">
+                                <div class="bp-slot-name" id="bp-name-primary">Empty</div>
+                                <div class="bp-slot-sub">主武器</div>
+                            </div>
+                        </div>
+                        <div class="bp-slot" id="bp-slot-armor">
+                            <div class="bp-slot-icon">🛡️</div>
+                            <div class="bp-slot-info">
+                                <div class="bp-slot-name" id="bp-name-armor">None</div>
+                                <div class="bp-slot-sub">护甲</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bp-stats">
+                        <div class="bp-stat-row">
+                            <span class="bp-stat-label">生命值</span>
+                            <span class="bp-stat-val" id="bp-stat-health">100</span>
+                        </div>
+                        <div class="bp-stat-row">
+                            <span class="bp-stat-label">护甲</span>
+                            <span class="bp-stat-val" id="bp-stat-armor">0</span>
+                        </div>
+                        <div class="bp-stat-row">
+                            <span class="bp-stat-label">弹药</span>
+                            <span class="bp-stat-val" id="bp-stat-ammo">30 / 120</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="backpack-right">
+                    <div class="bp-section-title">背包物品</div>
+                    <div class="bp-grid" id="backpack-grid">
+                        <!-- Slots will be generated by JS -->
+                    </div>
+                </div>
+            </div>
+            <div class="backpack-footer">
+                <div class="bp-weight">重量: <span id="bp-weight-val"></span></div>
+                <div class="bp-currency">本局收益: <span id="bp-currency-val">0</span></div>
+            </div>
+        </div>
+
+        <!-- 独立容器窗口：仅在与箱子/容器交互时显示 -->
+        <div class="backpack-container" id="container-window" style="display:none; width:420px;">
+            <div class="backpack-header">容器</div>
+            <div class="backpack-content">
+                <div class="backpack-right" style="flex:1;">
+                    <div class="bp-section-title">战利品</div>
+                    <div class="bp-grid" id="container-grid">
+                        <!-- Container slots will be generated by JS when activeContainer is set -->
+                    </div>
+                </div>
+            </div>
+            <div class="backpack-footer">
+                <div class="bp-weight">&nbsp;</div>
+                <div class="bp-currency">&nbsp;</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 改名弹窗 -->
+    <div id="rename-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); z-index:2000; align-items:center; justify-content:center; pointer-events:auto;">
+        <div class="rename-dialog">
+            <div class="rename-title">更改名称</div>
+            <div class="rename-subtitle">此名称将在仓库和未来排行榜中显示。</div>
+            <input id="rename-input" class="rename-input" type="text" maxlength="20" placeholder="输入新名称" />
+            <div class="rename-actions">
+                <button id="rename-confirm" class="rename-btn rename-btn-primary">确认</button>
+                <button id="rename-cancel" class="rename-btn rename-btn-secondary">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 设置界面 (优化版) -->
+    <div id="settings-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:3000; pointer-events:auto; backdrop-filter: blur(5px);">
+        <div class="settings-menu">
+            <div class="settings-header">
+                <div class="settings-title">设置</div>
+                <!-- Optional: Close X button if needed -->
+            </div>
+            
+            <div class="settings-content">
+                <!-- Controls Section -->
+                <div class="settings-section">
+                    <div class="section-title">控制</div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span>鼠标灵敏度</span>
+                            <span class="setting-desc">调整瞄准灵敏度</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="range" id="mouse-sensitivity-slider" min="0.1" max="3.0" step="0.1" value="1.0" class="t-slider">
+                            <span id="mouse-sensitivity-value" class="value-display">1.0</span>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span>准星样式</span>
+                            <span class="setting-desc">选择准星的外观风格</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="crosshair-style-select" class="t-select">
+                                <option value="classic">经典准星</option>
+                                <option value="pixel">像素风格</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Graphics Section -->
+                <div class="settings-section">
+                    <div class="section-title">画质</div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span>阴影质量</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="shadow-quality-select" class="t-select">
+                                <option value="off">关闭</option>
+                                <option value="medium">中</option>
+                                <option value="high">高</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span>纹理过滤</span>
+                            <span class="setting-desc">各向异性过滤等级</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="aniso-quality-select" class="t-select">
+                                <option value="low">低 (1x)</option>
+                                <option value="medium">中 (半开)</option>
+                                <option value="max">最高</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span>渲染距离</span>
+                            <span class="setting-desc">物体绘制距离</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="render-distance-select" class="t-select">
+                                <option value="near">近</option>
+                                <option value="medium">中</option>
+                                <option value="far">远</option>
+                                <option value="ultra" selected>极远</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- System Section -->
+                <div class="settings-section">
+                    <div class="section-title">系统</div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span>性能监控</span>
+                            <span class="setting-desc">显示帧率和延迟</span>
+                        </div>
+                        <div class="setting-control">
+                            <label class="t-switch">
+                                <input type="checkbox" id="perf-details-toggle">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-footer">
+                <button id="settings-cancel-btn" class="settings-btn settings-btn-cancel">取消</button>
+                <button id="settings-apply-btn" class="settings-btn settings-btn-apply">应用更改</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 游戏结束结算界面 -->
+    <div id="game-over-screen" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(135deg, rgba(0, 0, 0, 0.98) 0%, rgba(17, 24, 39, 0.98) 100%); z-index: 99999; pointer-events: all; backdrop-filter: blur(10px);">
+        <!-- 动画背景效果 -->
+        <div class="game-over-bg">
+            <div class="pulse-bg"></div>
+            <div class="grid-bg"></div>
+        </div>
+        
+        <!-- 主要内容区域 -->
+        <div class="game-over-content">
+            <!-- 结果标题 -->
+            <div id="game-result" class="result-title"></div>
+            
+            <!-- 分割线 -->
+            <div class="divider-line"></div>
+            
+            <!-- 主要指标：本局收益（最显眼位置 -->
+            <div class="main-earnings-panel">
+                <div class="earnings-label">本局收益</div>
+                <div class="earnings-value">
+                    <span id="session-earnings">0</span> 💰
+                </div>
+                <div class="earnings-glow"></div>
+            </div>
+            
+            <!-- 简化的核心统计面板 -->
+            <div class="simple-stats-panel">
+                <div class="simple-stats-grid">
+                    <div class="simple-stat-item">
+                        <span class="simple-stat-label">爆头率</span>
+                        <span class="simple-stat-value orange" id="session-headshot-rate">0%</span>
+                    </div>
+                    <div class="simple-stat-item">
+                        <span class="simple-stat-label">总伤害</span>
+                        <span class="simple-stat-value red" id="session-damage">0</span>
+                    </div>
+                    <div class="simple-stat-item">
+                        <span class="simple-stat-label">游戏时长</span>
+                        <span class="simple-stat-value blue" id="session-duration">0s</span>
+                    </div>
+                    <div class="simple-stat-item">
+                        <span class="simple-stat-label">击杀数</span>
+                        <span class="simple-stat-value" id="session-kills">0</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 离开按钮 -->
+            <button id="leave-game-btn" class="leave-btn">
+                返回仓库
+            </button>
+        </div>
+        
+        <!-- CSS样式 -->
+        <style>
+            .game-over-bg {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                overflow: hidden;
+            }
+            
+            .pulse-bg {
+                position: absolute;
+                top: -50%;
+                left: -50%;
+                width: 200%;
+                height: 200%;
+                background: radial-gradient(circle, rgba(234, 179, 8, 0.1) 0%, transparent 50%);
+                animation: gameOverPulse 4s ease-in-out infinite;
+            }
+            
+            .grid-bg {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(234, 179, 8, 0.05)" stroke-width="0.5"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+                opacity: 0.3;
+            }
+            
+            .game-over-content {
+                position: relative;
+                z-index: 10;
+                height: 100%;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                padding: 20px;
+            }
+            
+            .result-title {
+                font-size: 4rem;
+                font-weight: 900;
+                margin-bottom: 1rem;
+                text-transform: uppercase;
+                letter-spacing: 4px;
+                text-shadow: 0 0 20px currentColor, 0 4px 8px rgba(0, 0, 0, 0.8);
+                animation: resultSlideIn 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+            }
+            
+            .divider-line {
+                width: 100px;
+                height: 4px;
+                background: linear-gradient(90deg, transparent, #eab308, transparent);
+                margin-bottom: 2rem;
+                animation: lineExpand 1s ease-out 0.3s both;
+            }
+            
+            /* 主要收益面板 -最显眼的位置 */
+            .main-earnings-panel {
+                position: relative;
+                margin-bottom: 3rem;
+                text-align: center;
+                animation: earningsPulseIn 1s ease-out 0.4s both;
+            }
+            
+            .earnings-label {
+                font-size: 1.5rem;
+                color: #9ca3af;
+                margin-bottom: 1rem;
+                text-transform: uppercase;
+                letter-spacing: 3px;
+                font-weight: 700;
+            }
+            
+            .earnings-value {
+                font-size: 5rem;
+                font-weight: 900;
+                color: #eab308;
+                text-shadow: 
+                    0 0 30px rgba(234, 179, 8, 0.8),
+                    0 0 60px rgba(234, 179, 8, 0.6),
+                    0 4px 8px rgba(0, 0, 0, 0.8);
+                animation: earningsGlow 2s ease-in-out infinite;
+            }
+            
+            .earnings-glow {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: 150%;
+                height: 150%;
+                background: radial-gradient(circle, rgba(234, 179, 8, 0.2) 0%, transparent 70%);
+                animation: earningsGlowPulse 3s ease-in-out infinite;
+                pointer-events: none;
+            }
+            
+            /* 简化的统计面板 */
+            .simple-stats-panel {
+                background: linear-gradient(135deg, rgba(30, 30, 30, 0.9), rgba(20, 20, 20, 0.9));
+                border: 2px solid rgba(234, 179, 8, 0.3);
+                border-radius: 20px;
+                padding: 2rem 2.5rem;
+                margin-bottom: 3rem;
+                box-shadow: 0 0 40px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(234, 179, 8, 0.1);
+                animation: panelSlideUp 0.8s ease-out 0.6s both;
+            }
+            
+            .simple-stats-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 2rem;
+                min-width: 400px;
+            }
+            
+            .simple-stat-item {
+                text-align: center;
+                padding: 1rem;
+            }
+            
+            .simple-stat-label {
+                display: block;
+                font-size: 1.1rem;
+                color: #9ca3af;
+                margin-bottom: 0.5rem;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                font-weight: 700;
+            }
+            
+            .simple-stat-value {
+                display: block;
+                font-size: 1.8rem;
+                font-weight: 900;
+                color: #fff;
+            }
+            
+            .simple-stat-value.orange { color: #ff9500; }
+            .simple-stat-value.red { color: #ef4444; }
+            .simple-stat-value.blue { color: #3b82f6; }
+            
+            .stats-panel {
+                background: linear-gradient(135deg, rgba(30, 30, 30, 0.9), rgba(20, 20, 20, 0.9));
+                border: 2px solid rgba(234, 179, 8, 0.3);
+                border-radius: 20px;
+                padding: 2.5rem 3rem;
+                margin-bottom: 3rem;
+                box-shadow: 0 0 40px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(234, 179, 8, 0.1);
+                animation: panelSlideUp 0.8s ease-out 0.6s both;
+            }
+            
+            .stats-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 3rem;
+                min-width: 500px;
+            }
+            
+            .stats-section {
+                text-align: left;
+            }
+            
+            .section-title {
+                font-size: 1.3rem;
+                color: #eab308;
+                margin-bottom: 1.5rem;
+                text-transform: uppercase;
+                letter-spacing: 2px;
+                font-weight: 700;
+                border-bottom: 1px solid rgba(234, 179, 8, 0.3);
+                padding-bottom: 0.5rem;
+            }
+            
+            .stat-row {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 1rem;
+                padding: 0.5rem 0;
+            }
+            
+            .stat-row .stat-label {
+                font-size: 1.1rem;
+                color: #9ca3af;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+            
+            .stat-row .stat-value {
+                font-size: 1.3rem;
+                font-weight: 700;
+                color: #fff;
+            }
+            
+            .stat-row .stat-value.gold { color: #eab308; }
+            .stat-row .stat-value.green { color: #22c55e; }
+            .stat-row .stat-value.blue { color: #3b82f6; }
+            .stat-row .stat-value.orange { color: #ff9500; }
+            .stat-row .stat-value.red { color: #ef4444; }
+            
+            .leave-btn {
+                background: linear-gradient(135deg, #eab308, #f59e0b);
+                color: #000;
+                border: none;
+                padding: 15px 40px;
+                font-size: 1.3rem;
+                font-weight: 900;
+                cursor: pointer;
+                text-transform: uppercase;
+                letter-spacing: 2px;
+                border-radius: 50px;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                box-shadow: 0 4px 15px rgba(234, 179, 8, 0.4), 0 0 20px rgba(234, 179, 8, 0.2);
+                animation: buttonBounceIn 0.6s ease-out 0.9s both;
+            }
+            
+            .leave-btn:hover {
+                transform: translateY(-2px) scale(1.05);
+                box-shadow: 0 6px 20px rgba(234, 179, 8, 0.6), 0 0 30px rgba(234, 179, 8, 0.4);
+                background: linear-gradient(135deg, #facc15, #eab308);
+            }
+            
+            /* 动画定义 */
+            @keyframes gameOverPulse {
+                0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.3; }
+                50% { transform: scale(1.1) rotate(180deg); opacity: 0.6; }
+            }
+            
+            @keyframes resultSlideIn {
+                0% { transform: translateY(-100px) scale(0.5); opacity: 0; }
+                60% { transform: translateY(20px) scale(1.1); opacity: 1; }
+                100% { transform: translateY(0) scale(1); opacity: 1; }
+            }
+            
+            @keyframes lineExpand {
+                0% { width: 0; opacity: 0; }
+                100% { width: 100px; opacity: 1; }
+            }
+            
+            @keyframes earningsPulseIn {
+                0% { transform: scale(0.3); opacity: 0; }
+                50% { transform: scale(1.1); opacity: 1; }
+                100% { transform: scale(1); opacity: 1; }
+            }
+            
+            @keyframes earningsGlow {
+                0%, 100% { 
+                    text-shadow: 
+                        0 0 30px rgba(234, 179, 8, 0.8),
+                        0 0 60px rgba(234, 179, 8, 0.6),
+                        0 4px 8px rgba(0, 0, 0, 0.8);
+                }
+                50% { 
+                    text-shadow: 
+                        0 0 40px rgba(234, 179, 8, 1),
+                        0 0 80px rgba(234, 179, 8, 0.8),
+                        0 4px 8px rgba(0, 0, 0, 0.8);
+                }
+            }
+            
+            @keyframes earningsGlowPulse {
+                0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.5; }
+                50% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.8; }
+            }
+            
+            @keyframes panelSlideUp {
+                0% { transform: translateY(50px) scale(0.9); opacity: 0; }
+                100% { transform: translateY(0) scale(1); opacity: 1; }
+            }
+            
+            @keyframes buttonBounceIn {
+                0% { transform: translateY(30px) scale(0.8); opacity: 0; }
+                70% { transform: translateY(-10px) scale(1.05); opacity: 1; }
+                100% { transform: translateY(0) scale(1); opacity: 1; }
+            }
+        </style>
+    </div>
+
+    <!-- 联机房间选择界面 -->
+    <div id="room-selection-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.8); z-index: 10000; backdrop-filter: blur(5px);">
+        <div class="room-selection-panel" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: linear-gradient(135deg, #1f2937 0%, #111827 100%); border: 2px solid #22c55e; border-radius: 20px; padding: 40px; min-width: 600px; max-width: 800px; max-height: 70vh; box-shadow: 0 0 50px rgba(34, 197, 94, 0.3);">
+            <div class="room-selection-header" style="text-align: center; margin-bottom: 30px;">
+                <h2 style="color: #22c55e; font-size: 28px; margin: 0; text-shadow: 0 0 15px rgba(34, 197, 94, 0.6);">联机模式</h2>
+                <p style="color: #9ca3af; margin: 10px 0 0 0; font-size: 16px;">选择要加入的房间</p>
+            </div>
+            
+            <!-- 房间列表 -->
+            <div class="room-list-container" style="background: rgba(0, 0, 0, 0.3); border-radius: 12px; padding: 20px; margin-bottom: 20px; max-height: 400px; overflow-y: auto;">
+                <div id="room-list" style="display: flex; flex-direction: column; gap: 15px;">
+                    <!-- 示例房间 -->
+                    <div class="room-item" style="background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 8px; padding: 15px; cursor: pointer; transition: all 0.3s ease;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div style="color: #22c55e; font-size: 18px; font-weight: bold; margin-bottom: 5px;">房间 #001</div>
+                                <div style="color: #9ca3af; font-size: 14px;">房主: Player123 | 玩家: 2/4</div>
+                                <div style="color: #6b7280; font-size: 12px; margin-top: 5px;">地图: 训练场 | 模式: 普通</div>
+                            </div>
+                            <button class="join-room-item-btn" style="background: #22c55e; color: white; border: none; border-radius: 6px; padding: 8px 16px; font-size: 14px; cursor: pointer; transition: all 0.3s ease;">加入</button>
+                        </div>
+                    </div>
+                    
+                    <div class="room-item" style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 15px; cursor: pointer; transition: all 0.3s ease;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div style="color: #3b82f6; font-size: 18px; font-weight: bold; margin-bottom: 5px;">房间 #002</div>
+                                <div style="color: #9ca3af; font-size: 14px;">房主: Gamer456 | 玩家: 1/4</div>
+                                <div style="color: #6b7280; font-size: 12px; margin-top: 5px;">地图: 训练场 | 模式: 困难</div>
+                            </div>
+                            <button class="join-room-item-btn" style="background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 16px; font-size: 14px; cursor: pointer; transition: all 0.3s ease;">加入</button>
+                        </div>
+                    </div>
+                    
+                    <div class="room-item" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 15px; cursor: pointer; transition: all 0.3s ease;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div style="color: #ef4444; font-size: 18px; font-weight: bold; margin-bottom: 5px;">房间 #003</div>
+                                <div style="color: #9ca3af; font-size: 14px;">房主: ProPlayer | 玩家: 3/4</div>
+                                <div style="color: #6b7280; font-size: 12px; margin-top: 5px;">地图: 训练场 | 模式: 疯狂</div>
+                            </div>
+                            <button class="join-room-item-btn" style="background: #ef4444; color: white; border: none; border-radius: 6px; padding: 8px 16px; font-size: 14px; cursor: pointer; transition: all 0.3s ease;">加入</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 无房间提示 -->
+                <div id="no-rooms-message" style="display: none; text-align: center; padding: 40px; color: #6b7280;">
+                    <div style="font-size: 48px; margin-bottom: 10px;">🔍</div>
+                    <div style="font-size: 16px;">暂无可用房间</div>
+                    <div style="font-size: 14px; margin-top: 5px;">创建一个新房间开始游戏吧</div>
+                </div>
+            </div>
+            
+            <!-- 底部按钮区域 -->
+            <div class="room-selection-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+                <button id="back-to-stash-btn" style="background: transparent; color: #6b7280; border: 1px solid #4b5563; border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer; transition: all 0.3s ease;">
+                    返回仓库
+                </button>
+                
+                <div class="room-action-buttons" style="display: flex; gap: 15px;">
+                    <button id="create-room-btn" class="room-btn" style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: white; border: none; border-radius: 10px; padding: 12px 24px; font-size: 16px; font-weight: bold; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3);">
+                        🏠 创建房间
+                    </button>
+                    
+                    <button id="join-room-code-btn" class="room-btn" style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; border: none; border-radius: 10px; padding: 12px 24px; font-size: 16px; font-weight: bold; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);">
+                        🔗 房间号加入
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/colyseus.js@0.16.0/dist/colyseus.js"></script>
+    <script src="photon.js"></script>
+    <script type="module" src="src/main.js"></script>
+</body>
+</html>

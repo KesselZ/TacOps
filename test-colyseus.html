@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Colyseus 连接测试</title>
+  <!-- 建议使用和服务器同一大版本的 colyseus.js 0.16.x -->
+  <script src="https://cdn.jsdelivr.net/npm/colyseus.js@0.16.0/dist/colyseus.js"></script>
+</head>
+<body>
+  <h1>Colyseus 连接测试</h1>
+  <div id="output"></div>
+
+  <script>
+    const output = document.getElementById('output');
+
+    function log(message) {
+      console.log(message);
+      output.innerHTML += '<pre>' + (typeof message === 'string' ? message : JSON.stringify(message, null, 2)) + '</pre>';
+    }
+
+    const client = new Colyseus.Client('ws://120.53.87.81:2567');
+
+    async function testConnection() {
+      try {
+        log('正在连接到服务器并加入 my_room...');
+
+        // 直接尝试加入/创建 'my_room'
+        const room = await client.joinOrCreate('my_room');
+
+        log('✅ 已加入房间: ' + room.roomId);
+        log('会话ID: ' + room.sessionId);
+
+        // 发送一次 join 消息，让服务器创建 Player
+        room.send('join', { name: 'WebTest_' + room.sessionId });
+
+        // 监听状态变化
+        room.onStateChange((state) => {
+          log('状态更新: ' + JSON.stringify(state));
+        });
+
+      } catch (e) {
+        log('❌ 连接或加入失败: ' + e.message);
+      }
+    }
+
+    testConnection();
+  </script>
+</body>
+</html>

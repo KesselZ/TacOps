@@ -1,0 +1,444 @@
+/* Backpack UI Styles */
+#backpack-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 2500; /* Below settings (3000) but above game UI */
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    pointer-events: auto;
+}
+
+.backpack-container {
+    width: 900px;
+    height: 650px;
+    background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
+    border: 1px solid #333;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 0 50px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    overflow: hidden;
+    font-family: 'Segoe UI', sans-serif;
+    animation: bpFadeIn 0.2s ease-out;
+}
+
+@keyframes bpFadeIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.backpack-header {
+    height: 60px;
+    background: #111;
+    border-bottom: 1px solid #2a2a2a;
+    display: flex;
+    align-items: center;
+    padding: 0 30px;
+    font-size: 1.4rem;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: #eab308;
+    text-transform: uppercase;
+    text-shadow: 0 0 15px rgba(234, 179, 8, 0.2);
+}
+
+.backpack-content {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.backpack-left {
+    width: 320px;
+    background: rgba(0, 0, 0, 0.2);
+    border-right: 1px solid #2a2a2a;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.backpack-right {
+    flex: 1;
+    min-width: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    background: radial-gradient(circle at top right, #1a1a1a 0%, #050505 100%);
+}
+
+/* 独立容器窗口：复用背包外观但更窄一些 */
+#container-window {
+    width: 420px;
+}
+
+.bp-section-title {
+    font-size: 0.9rem;
+    color: #666;
+    border-bottom: 1px solid #333;
+    padding-bottom: 8px;
+    margin-bottom: 15px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+/* Equipped Slots */
+.bp-equip-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.bp-slot {
+    background: #161616;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 10px;
+    min-height: 60px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    transition: all 0.2s;
+}
+
+.bp-slot:hover {
+    border-color: #555;
+    background: #1c1c1c;
+}
+
+.bp-slot-icon {
+    font-size: 24px;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0a0a0a;
+    border-radius: 4px;
+    border: 1px solid #222;
+}
+
+.bp-slot-info {
+    flex: 1;
+}
+
+.bp-slot-name {
+    color: #ddd;
+    font-weight: 700;
+    font-size: 0.95rem;
+    margin-bottom: 4px;
+}
+
+.bp-slot-sub {
+    color: #777;
+    font-size: 0.8rem;
+}
+
+/* EQUIPPED 槽位按稀有度着色，风格与背包格子保持一致 */
+.bp-slot.rarity-common {
+    background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+    border-color: #4a4a4a;
+}
+
+.bp-slot.rarity-uncommon {
+    background: linear-gradient(135deg, #1a2a3a 0%, #2a3a4a 100%);
+    border-color: #3b82f6;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.25);
+}
+
+.bp-slot.rarity-rare {
+    background: linear-gradient(135deg, #2a1a3a 0%, #3a2a4a 100%);
+    border-color: #8b5cf6;
+    box-shadow: 0 0 8px rgba(139, 92, 246, 0.25);
+}
+
+.bp-slot.rarity-legendary {
+    background: linear-gradient(135deg, #3a2a1a 0%, #4a3a2a 100%);
+    border-color: #eab308;
+    box-shadow: 0 0 12px rgba(234, 179, 8, 0.35);
+}
+
+/* Stats Area */
+.bp-stats {
+    margin-top: auto;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 15px;
+    border-radius: 4px;
+    border: 1px solid #222;
+}
+
+.bp-stat-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+}
+
+.bp-stat-row:last-child {
+    margin-bottom: 0;
+}
+
+.bp-stat-label {
+    color: #888;
+}
+
+.bp-stat-val {
+    color: #eee;
+    font-weight: 700;
+    font-family: monospace;
+}
+
+/* Storage Grid */
+.bp-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+    gap: 8px;
+    overflow-y: auto;
+    padding-right: 5px;
+}
+
+.bp-grid-cell {
+    aspect-ratio: 1;
+    background: #141414;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+    transition: all 0.1s;
+    position: relative;
+}
+
+.bp-grid-cell:hover {
+    border-color: #444;
+    background: #1a1a1a;
+}
+
+.bp-grid-cell.occupied {
+    cursor: pointer;
+    border-color: #444;
+    background: #1a1a1a;
+}
+
+.bp-grid-cell.occupied:hover {
+    border-color: #eab308;
+    box-shadow: 0 0 10px rgba(234, 179, 8, 0.1);
+}
+
+.bp-item-icon {
+    font-size: 28px;
+    filter: drop-shadow(0 2px 2px rgba(0,0,0,0.5));
+}
+
+.bp-item-count {
+    position: absolute;
+    bottom: 2px;
+    right: 4px;
+    font-size: 0.75rem;
+    color: #aaa;
+    font-weight: 700;
+    text-shadow: 1px 1px 0 #000;
+}
+
+.bp-grid-cell.unidentified {
+  background-color: rgba(31, 41, 55, 0.8);
+  border-color: rgba(148, 163, 184, 0.9);
+  color: #9ca3af;
+  animation: bp-unidentified-pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes bp-unidentified-pulse {
+  from {
+    opacity: 0.6;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 刚揭示出来的不同稀有度物品：短暂的高亮动画 */
+.bp-grid-cell.reveal-pulse.rarity-common {
+  animation: bp-reveal-common 0.35s ease-out;
+}
+
+.bp-grid-cell.reveal-pulse.rarity-uncommon {
+  animation: bp-reveal-uncommon 0.45s ease-out;
+}
+
+.bp-grid-cell.reveal-pulse.rarity-rare {
+  animation: bp-reveal-rare 0.55s ease-out;
+}
+
+.bp-grid-cell.reveal-pulse.rarity-legendary {
+  animation: bp-reveal-legendary 0.7s ease-out;
+}
+
+@keyframes bp-reveal-common {
+  from { opacity: 0.2; box-shadow: 0 0 0 rgba(156,163,175,0.0); }
+  to   { opacity: 1;   box-shadow: 0 0 14px rgba(156,163,175,0.4); }
+}
+
+@keyframes bp-reveal-uncommon {
+  from { opacity: 0.2; box-shadow: 0 0 0 rgba(59,130,246,0.0); }
+  to   { opacity: 1;   box-shadow: 0 0 18px rgba(59,130,246,0.6); }
+}
+
+@keyframes bp-reveal-rare {
+  from { opacity: 0.2; box-shadow: 0 0 0 rgba(139,92,246,0.0); }
+  to   { opacity: 1;   box-shadow: 0 0 22px rgba(139,92,246,0.7); }
+}
+
+@keyframes bp-reveal-legendary {
+  from { opacity: 0.2; box-shadow: 0 0 0 rgba(234,179,8,0.0); }
+  to   { opacity: 1;   box-shadow: 0 0 26px rgba(234,179,8,0.9); }
+}
+
+.backpack-footer {
+    height: 50px;
+    background: #111;
+    border-top: 1px solid #2a2a2a;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 30px;
+    font-size: 0.9rem;
+    color: #888;
+}
+
+.bp-footer-info span {
+    color: #eee;
+    font-weight: 700;
+    margin-left: 8px;
+}
+
+.bp-weight span { color: #ccc; }
+.bp-currency span { color: #eab308; }
+
+/* 稀有度背景颜色 */
+.bp-grid-cell.rarity-common {
+    background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+    border-color: #4a4a4a;
+}
+
+.bp-grid-cell.rarity-uncommon {
+    background: linear-gradient(135deg, #1a2a3a 0%, #2a3a4a 100%);
+    border-color: #3b82f6;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.2);
+}
+
+.bp-grid-cell.rarity-rare {
+    background: linear-gradient(135deg, #2a1a3a 0%, #3a2a4a 100%);
+    border-color: #8b5cf6;
+    box-shadow: 0 0 8px rgba(139, 92, 246, 0.2);
+}
+
+.bp-grid-cell.rarity-legendary {
+    background: linear-gradient(135deg, #3a2a1a 0%, #4a3a2a 100%);
+    border-color: #eab308;
+    box-shadow: 0 0 12px rgba(234, 179, 8, 0.3);
+}
+
+/* 稀有度hover效果 */
+.bp-grid-cell.rarity-common:hover {
+    border-color: #6a6a6a;
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.1);
+}
+
+.bp-grid-cell.rarity-uncommon:hover {
+    border-color: #60a5fa;
+    box-shadow: 0 0 15px rgba(59, 130, 246, 0.4);
+}
+
+.bp-grid-cell.rarity-rare:hover {
+    border-color: #a78bfa;
+    box-shadow: 0 0 15px rgba(139, 92, 246, 0.4);
+}
+
+.bp-grid-cell.rarity-legendary:hover {
+    border-color: #fbbf24;
+    box-shadow: 0 0 20px rgba(234, 179, 8, 0.5);
+}
+
+/* 背包物品悬停提示框 */
+.bp-hover-tooltip {
+    background: radial-gradient(circle at top left, rgba(15,23,42,0.98) 0%, rgba(15,23,42,0.94) 55%, rgba(3,7,18,0.98) 100%);
+    border: 1px solid rgba(75,85,99,0.9);
+    border-radius: 8px;
+    padding: 8px 11px;
+    font-size: 12px;
+    color: #e5e7eb;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.9);
+    max-width: 230px;
+    backdrop-filter: blur(6px);
+}
+
+/* 稀有度高亮边框/光晕 */
+.bp-hover-tooltip.rarity-common {
+    border-color: #4b5563;
+}
+
+.bp-hover-tooltip.rarity-uncommon {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 1px rgba(59,130,246,0.3), 0 14px 30px rgba(15,23,42,0.95);
+}
+
+.bp-hover-tooltip.rarity-rare {
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 1px rgba(139,92,246,0.4), 0 14px 32px rgba(15,23,42,0.96);
+}
+
+.bp-hover-tooltip.rarity-legendary {
+    border-color: #eab308;
+    box-shadow: 0 0 0 1px rgba(234,179,8,0.5), 0 16px 34px rgba(15,23,42,0.98);
+}
+
+.bp-tt-name {
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 2px;
+}
+
+.bp-hover-tooltip.rarity-uncommon .bp-tt-name {
+    color: #bfdbfe; /* 浅蓝 */
+}
+
+.bp-hover-tooltip.rarity-rare .bp-tt-name {
+    color: #e9d5ff; /* 浅紫 */
+}
+
+.bp-hover-tooltip.rarity-legendary .bp-tt-name {
+    color: #fef3c7; /* 浅金 */
+}
+
+.bp-tt-rarity {
+    font-size: 11px;
+    color: #9ca3af;
+    margin-bottom: 4px;
+}
+
+.bp-hover-tooltip.rarity-uncommon .bp-tt-rarity {
+    color: #93c5fd; /* 蓝色稀有度文本 */
+}
+
+.bp-hover-tooltip.rarity-rare .bp-tt-rarity {
+    color: #d8b4fe; /* 紫色稀有度文本 */
+}
+
+.bp-hover-tooltip.rarity-legendary .bp-tt-rarity {
+    color: #facc15; /* 金色，用于传奇稀有度文本 */
+}
+
+.bp-tt-line {
+    font-size: 11px;
+    color: #d1d5db;
+    margin-top: 2px;
+}

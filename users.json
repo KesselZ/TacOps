@@ -1,0 +1,93 @@
+{
+  "user_1763899296662_s8wgb2rcq": {
+    "user_id": "user_1763899296662_s8wgb2rcq",
+    "created_at": "2025-11-23T20:01:36.966149",
+    "currency": 30900,
+    "total_score": 42900,
+    "games_played": 80,
+    "last_login": "2025-11-25T01:03:56.581865",
+    "settings": {
+      "sound_volume": 1,
+      "mouse_sensitivity": 1
+    },
+    "updated_at": "2025-11-25T01:03:56.893665"
+  },
+  "user_1764036129319_9uwwm687c": {
+    "user_id": "user_1764036129319_9uwwm687c",
+    "created_at": "2025-11-25T10:02:09.625360",
+    "currency": 3500,
+    "total_score": 1500,
+    "games_played": 4,
+    "last_login": "2025-11-25T10:33:40.022571",
+    "settings": {
+      "sound_volume": 1,
+      "mouse_sensitivity": 1
+    },
+    "updated_at": "2025-11-25T10:33:40.331276"
+  },
+  "user_1764038596856_mvwj5xjls": {
+    "user_id": "user_1764038596856_mvwj5xjls",
+    "created_at": "2025-11-25T10:43:17.172112",
+    "currency": 2000,
+    "total_score": 0,
+    "games_played": 3,
+    "last_login": "2025-11-25T10:46:23.357945",
+    "settings": {
+      "sound_volume": 1,
+      "mouse_sensitivity": 1
+    },
+    "updated_at": "2025-11-25T10:46:23.673257"
+  },
+  "user_1764039313460_aux6rj92m": {
+    "user_id": "user_1764039313460_aux6rj92m",
+    "created_at": "2025-11-25T10:55:13.774672",
+    "currency": 7700,
+    "total_score": 4400,
+    "games_played": 122,
+    "last_login": "2025-11-26T12:46:38.764211",
+    "settings": {
+      "sound_volume": 1,
+      "mouse_sensitivity": 1
+    },
+    "updated_at": "2025-11-26T12:46:39.084319"
+  },
+  "user_1764182665576_ro108sygi": {
+    "user_id": "user_1764182665576_ro108sygi",
+    "created_at": "2025-11-26T13:44:25.882584",
+    "currency": 13600,
+    "total_score": 13600,
+    "games_played": 58,
+    "last_login": "2025-11-27T13:36:01.363256",
+    "settings": {
+      "sound_volume": 1,
+      "mouse_sensitivity": 1
+    },
+    "updated_at": "2025-11-27T13:42:41.985223"
+  },
+  "user_1764174771946_qfxy8j6if": {
+    "user_id": "user_1764174771946_qfxy8j6if",
+    "created_at": "2025-11-27T00:32:52.261882",
+    "currency": 10500,
+    "total_score": 8500,
+    "games_played": 41,
+    "last_login": "2025-11-27T12:48:31.468223",
+    "settings": {
+      "sound_volume": 1,
+      "mouse_sensitivity": 1
+    },
+    "updated_at": "2025-11-27T12:49:06.974366"
+  },
+  "user_1764269735945_znpe2tvk6": {
+    "user_id": "user_1764269735945_znpe2tvk6",
+    "created_at": "2025-11-27T13:55:36.262079",
+    "currency": 3600,
+    "total_score": 1600,
+    "games_played": 11,
+    "last_login": "2025-11-27T17:51:06.598382",
+    "settings": {
+      "sound_volume": 1,
+      "mouse_sensitivity": 1
+    },
+    "updated_at": "2025-11-27T17:51:06.907619"
+  }
+}
