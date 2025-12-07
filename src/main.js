@@ -3,11 +3,11 @@ import { state } from './globals.js';
 import { CONFIG } from './config.js';
 import { colyseusClient } from './colyseusClient.js';
 import { multiplayerPlayers } from './multiplayerPlayers.js';
-import { initGraphics, initPhysics, updateDebris, updateAmmoPickups, resetWorldRuntime, buildLevel, updateStaticPhysicsAroundPlayer, updateAmmoPickupEffects, updateEnvironmentSettings, resetStaticPhysicsAccumTime, updateDroppedItems, updateItemPickupEffects, updateInteractionFocus, buildArenaLevel } from './world.js';
+import { initGraphics, initPhysics, updateDebris, updateAmmoPickups, updateHealthPickups, resetWorldRuntime, buildLevel, updateStaticPhysicsAroundPlayer, updateAmmoPickupEffects, updateEnvironmentSettings, resetStaticPhysicsAccumTime, updateDroppedItems, updateItemPickupEffects, updateInteractionFocus, buildArenaLevel } from './world.js';
 import { initStash, RARITY } from './stash.js';
 import { renderStashUI, initStashUIEvents } from './stashUI.js';
 import { buildWeapon, updateWeapon, updateBullets, clearBullets } from './weapon.js';
-import { updateEnemySpawnsAroundPlayer } from './enemy.js';
+import { updateEnemySpawnsAroundPlayer, updateEnemySpawnsAtEdges, updateEnemies } from './enemy.js';
 import { initEvents, updatePlayer } from './player.js';
 import { updateUI, showMenu, showPauseMenu, initPauseMenuEvents, hideGlobalLoading } from './ui.js';
 import { GameOverScreen } from './gameOverScreen.js';
@@ -200,6 +200,8 @@ export function animate() {
         // Debris & Pickups
         updateDebris(dt);
         updateAmmoPickups(dt).catch(err => console.error('Ammo pickup update error:', err));
+        // 血包拾取更新是同步函数，不返回 Promise，不能使用 .catch
+        updateHealthPickups(dt);
         updateAmmoPickupEffects(dt).catch(err => console.error('Ammo pickup effects update error:', err));
         updateItemPickupEffects(dt).catch?.(err => console.error('Item pickup effects update error:', err));
         updateDroppedItems(dt);
@@ -209,12 +211,18 @@ export function animate() {
         updateBullets(dt);
         
         // Enemies
-        // 仅在 PVE 模式下生成和更新敌人，联机训练场保持无 AI
+        // 仅在 PVE 模式下生成和更新敌人（包括挑战模式），联机训练场保持无 AI
         if (state.gameMode === 'pve') {
-            // 先根据玩家位置在200米内按需生成敌人
-            updateEnemySpawnsAroundPlayer();
-            // 再更新已存在敌人的行为
-            state.enemies.forEach(e => e.update());
+            // 根据难度选择不同的敌人生成策略
+            if (state.selectedDifficulty === 'challenge') {
+                // 挑战模式：边缘固定生成
+                updateEnemySpawnsAtEdges();
+            } else {
+                // 普通模式：基于玩家位置的动态生成
+                updateEnemySpawnsAroundPlayer();
+            }
+            // 更新已存在敌人的行为
+            updateEnemies(dt);
         }
 
         // Multiplayer dummy actors (本地假玩家/远端玩家展示，仅在 mp_arena 下启用)
@@ -351,8 +359,17 @@ export function startGameFromStash() {
         }
     }
     state.ammo = wp.maxAmmo || CONFIG.maxAmmo; // 弹夹容量不变
-    state.reserveAmmo = (wp.totalAmmo || CONFIG.totalAmmo) + ammoBonus; // 只增加备用弹药
-    state.maxReserveAmmo = state.reserveAmmo; // 记录本局最大备用弹药上限
+
+    // 基础备用弹药 + 背包加成
+    let baseReserve = (wp.totalAmmo || CONFIG.totalAmmo) + ammoBonus;
+
+    // 挑战模式下应用终端购买的备弹上限加成
+    if (state.selectedDifficulty === 'challenge' && state.challengeReserveAmmoMultiplier) {
+        baseReserve = Math.round(baseReserve * state.challengeReserveAmmoMultiplier);
+    }
+
+    state.reserveAmmo = baseReserve; // 当前备用弹药
+    state.maxReserveAmmo = baseReserve; // 记录本局最大备用弹药上限
     // console.log('🔫 弹药容量:', state.ammo, '/', state.reserveAmmo, '(基础', wp.maxAmmo, '/', wp.totalAmmo, '+ 背包加成:', ammoBonus, ')');
 
     // 根据外部背包品质动态决定本局背包格子数

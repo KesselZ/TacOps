@@ -418,19 +418,36 @@ let _equipBuffer;
 let _lootCommonBuffer;
 let _lootLegendaryBuffer;
 
+// 注意：为避免某些本地服务器对中文路径/编码处理异常，这里统一使用 ASCII 文件名。
+// 请确保以下文件存在：
+//   sounds/wear.mp3      （原穿装备.mp3）
+//   sounds/getCommon.mp3 （原出普通.mp3）
+//   sounds/getGold.mp3   （原出红.mp3）
 async function ensureEquipBuffer() {
     if (_equipBuffer) return _equipBuffer;
     const audio = ensureAudioContext();
-    const res = await fetch('sounds/穿装备.mp3');
-    const arrayBuf = await res.arrayBuffer();
-    _equipBuffer = await audio.decodeAudioData(arrayBuf);
-    return _equipBuffer;
+
+    try {
+        const res = await fetch('sounds/wear.mp3');
+        if (!res.ok) {
+            console.warn('Failed to load equip sound: HTTP', res.status);
+            _equipBuffer = null;
+            return _equipBuffer;
+        }
+        const arrayBuf = await res.arrayBuffer();
+        _equipBuffer = await audio.decodeAudioData(arrayBuf);
+        return _equipBuffer;
+    } catch (e) {
+        console.warn('Failed to decode wear.mp3, equip sound will be silent.', e);
+        _equipBuffer = null;
+        return _equipBuffer;
+    }
 }
 
 async function ensureLootCommonBuffer() {
     if (_lootCommonBuffer) return _lootCommonBuffer;
     const audio = ensureAudioContext();
-    const res = await fetch('sounds/出普通.mp3');
+    const res = await fetch('sounds/getCommon.mp3');
     const arrayBuf = await res.arrayBuffer();
     _lootCommonBuffer = await audio.decodeAudioData(arrayBuf);
     return _lootCommonBuffer;
@@ -439,7 +456,7 @@ async function ensureLootCommonBuffer() {
 async function ensureLootLegendaryBuffer() {
     if (_lootLegendaryBuffer) return _lootLegendaryBuffer;
     const audio = ensureAudioContext();
-    const res = await fetch('sounds/出红.mp3');
+    const res = await fetch('sounds/getGold.mp3');
     const arrayBuf = await res.arrayBuffer();
     _lootLegendaryBuffer = await audio.decodeAudioData(arrayBuf);
     return _lootLegendaryBuffer;
@@ -449,6 +466,7 @@ export async function playEquipSound() {
     try {
         const audio = ensureAudioContext();
         const buffer = await ensureEquipBuffer();
+        if (!buffer) return; // 静默失败，不再报错
         
         const source = audio.createBufferSource();
         source.buffer = buffer;

@@ -16,6 +16,19 @@ const SCORE_ANIM_DURATION_MS = 400;
 // 懒加载创建的 F 键交互提示元素
 let interactHintEl = null;
 
+// 记录打开挑战终端前是否处于指针锁定状态
+let wasPointerLockedBeforeTerminal = false;
+
+// 挑战模式终端 UI 状态
+let challengeTerminalPanelEl = null;
+let challengeTerminalOverlayEl = null;
+
+// 终端升级：固定价格与成长
+const CHALLENGE_UPGRADE_COST = 800;       // 每次升级固定 800 分
+const CHALLENGE_HP_STEP = 20;             // 每级 +20 HP
+const CHALLENGE_DMG_STEP = 0.10;          // 每级 +10% 伤害
+const CHALLENGE_AMMO_STEP = 0.20;         // 每级 +20% 备弹上限
+
 function getOrCreateInteractHintEl() {
     if (interactHintEl && interactHintEl.parentNode) return interactHintEl;
     const el = document.createElement('div');
@@ -41,6 +54,323 @@ function getOrCreateInteractHintEl() {
     document.body.appendChild(el);
     interactHintEl = el;
     return el;
+}
+
+function ensureChallengeTerminalState() {
+    if (typeof state.challengeTerminal === 'object') {
+        // 确保基础数值存在
+        if (typeof state.challengeTerminal.baseMaxHealth !== 'number') {
+            state.challengeTerminal.baseMaxHealth = typeof state.maxHealth === 'number' ? state.maxHealth : 100;
+        }
+        if (typeof state.challengeTerminal.baseMaxReserve !== 'number') {
+            const currentMaxReserve = typeof state.maxReserveAmmo === 'number' ? state.maxReserveAmmo : CONFIG.totalAmmo;
+            state.challengeTerminal.baseMaxReserve = currentMaxReserve;
+        }
+        return;
+    }
+
+    // 记录基础值，避免覆盖其他模式的默认配置
+    const baseMaxHealth = typeof state.maxHealth === 'number' ? state.maxHealth : 100;
+    const baseMaxReserve = typeof state.maxReserveAmmo === 'number' ? state.maxReserveAmmo : CONFIG.totalAmmo;
+    state.challengeTerminal = {
+        baseMaxHealth,
+        baseMaxReserve,
+        hpLevel: 0,
+        dmgLevel: 0,
+        ammoLevel: 0
+    };
+}
+
+function getOrCreateChallengeTerminalOverlay() {
+    if (challengeTerminalOverlayEl && challengeTerminalOverlayEl.parentNode) return challengeTerminalOverlayEl;
+    const overlay = document.createElement('div');
+    overlay.id = 'challenge-terminal-overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.left = '0';
+    overlay.style.top = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.background = 'rgba(15,23,42,0.75)';
+    overlay.style.backdropFilter = 'blur(6px)';
+    overlay.style.zIndex = '9998';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    document.body.appendChild(overlay);
+    challengeTerminalOverlayEl = overlay;
+    return overlay;
+}
+
+function getOrCreateChallengeTerminalPanel() {
+    if (challengeTerminalPanelEl && challengeTerminalPanelEl.parentNode) return challengeTerminalPanelEl;
+    const panel = document.createElement('div');
+    panel.id = 'challenge-terminal-panel';
+    panel.style.minWidth = '420px';
+    panel.style.maxWidth = '520px';
+    panel.style.background = 'rgba(15,23,42,0.98)';
+    panel.style.border = '1px solid rgba(148,163,184,0.9)';
+    panel.style.borderRadius = '12px';
+    panel.style.padding = '16px 20px 18px 20px';
+    panel.style.color = '#e5e7eb';
+    panel.style.fontSize = '14px';
+    panel.style.boxShadow = '0 18px 45px rgba(15,23,42,0.9)';
+    panel.style.display = 'flex';
+    panel.style.flexDirection = 'column';
+    panel.style.gap = '12px';
+
+    const header = document.createElement('div');
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'space-between';
+    header.style.marginBottom = '4px';
+
+    const title = document.createElement('div');
+    title.textContent = '挑战终端';
+    title.style.fontSize = '16px';
+    title.style.fontWeight = '600';
+    header.appendChild(title);
+
+    const scoreLabel = document.createElement('div');
+    scoreLabel.id = 'challenge-terminal-score';
+    scoreLabel.style.fontSize = '13px';
+    scoreLabel.style.color = '#a5b4fc';
+    header.appendChild(scoreLabel);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '×';
+    closeBtn.style.marginLeft = '12px';
+    closeBtn.style.width = '28px';
+    closeBtn.style.height = '28px';
+    closeBtn.style.borderRadius = '999px';
+    closeBtn.style.border = '1px solid rgba(148,163,184,0.7)';
+    closeBtn.style.background = 'rgba(15,23,42,0.9)';
+    closeBtn.style.color = '#e5e7eb';
+    closeBtn.style.cursor = 'pointer';
+    closeBtn.onmouseenter = () => { closeBtn.style.background = 'rgba(30,64,175,0.9)'; };
+    closeBtn.onmouseleave = () => { closeBtn.style.background = 'rgba(15,23,42,0.9)'; };
+    closeBtn.onclick = () => closeChallengeTerminalUI();
+    header.appendChild(closeBtn);
+
+    panel.appendChild(header);
+
+    const desc = document.createElement('div');
+    desc.textContent = '使用本局 mission score 购买强化，仅在当前挑战局内生效。';
+    desc.style.fontSize = '12px';
+    desc.style.color = '#9ca3af';
+    desc.style.marginBottom = '4px';
+    panel.appendChild(desc);
+
+    const list = document.createElement('div');
+    list.id = 'challenge-terminal-list';
+    list.style.display = 'flex';
+    list.style.flexDirection = 'column';
+    list.style.gap = '8px';
+    panel.appendChild(list);
+
+    const footer = document.createElement('div');
+    footer.style.marginTop = '6px';
+    footer.style.fontSize = '11px';
+    footer.style.color = '#6b7280';
+    footer.textContent = '提示：四个终端共享强化等级，多次访问不会重复收费。';
+    panel.appendChild(footer);
+
+    challengeTerminalPanelEl = panel;
+    return panel;
+}
+
+function renderChallengeTerminalRows() {
+    ensureChallengeTerminalState();
+    const list = document.getElementById('challenge-terminal-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    const scoreVal = typeof state.score === 'number' ? state.score : 0;
+    const scoreLabel = document.getElementById('challenge-terminal-score');
+    if (scoreLabel) {
+        scoreLabel.textContent = `当前分数：${scoreVal}`;
+    }
+
+    const baseMaxHealth = state.challengeTerminal.baseMaxHealth || (typeof state.maxHealth === 'number' ? state.maxHealth : 100);
+    const baseMaxReserve = state.challengeTerminal.baseMaxReserve || (typeof state.maxReserveAmmo === 'number' ? state.maxReserveAmmo : CONFIG.totalAmmo);
+
+    const items = [
+        {
+            id: 'hp',
+            title: '最大生命',
+            levelKey: 'hpLevel',
+            getCurrentText: (lvl) => {
+                const cur = baseMaxHealth + lvl * CHALLENGE_HP_STEP;
+                return `${cur} HP`;
+            },
+            getNextText: (lvl) => {
+                const nxt = baseMaxHealth + (lvl + 1) * CHALLENGE_HP_STEP;
+                return `${nxt} HP`;
+            },
+            getEffectText: () => `每次 +${CHALLENGE_HP_STEP} HP`
+        },
+        {
+            id: 'dmg',
+            title: '子弹伤害',
+            levelKey: 'dmgLevel',
+            getCurrentText: (lvl) => {
+                const mult = 1 + lvl * CHALLENGE_DMG_STEP;
+                return `${(mult * 100).toFixed(0)}%`;
+            },
+            getNextText: (lvl) => {
+                const mult = 1 + (lvl + 1) * CHALLENGE_DMG_STEP;
+                return `${(mult * 100).toFixed(0)}%`;
+            },
+            getEffectText: () => `每次 +${(CHALLENGE_DMG_STEP * 100).toFixed(0)}%`
+        },
+        {
+            id: 'ammo',
+            title: '备弹上限',
+            levelKey: 'ammoLevel',
+            getCurrentText: (lvl) => {
+                const mult = 1 + lvl * CHALLENGE_AMMO_STEP;
+                return `${(mult * 100).toFixed(0)}%（${Math.round(baseMaxReserve * mult)} 发）`;
+            },
+            getNextText: (lvl) => {
+                const mult = 1 + (lvl + 1) * CHALLENGE_AMMO_STEP;
+                return `${(mult * 100).toFixed(0)}%（${Math.round(baseMaxReserve * mult)} 发）`;
+            },
+            getEffectText: () => `每次 +${(CHALLENGE_AMMO_STEP * 100).toFixed(0)}%`
+        }
+    ];
+
+    for (const item of items) {
+        const level = state.challengeTerminal[item.levelKey] || 0;
+
+        const row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.alignItems = 'center';
+        row.style.justifyContent = 'space-between';
+        row.style.padding = '8px 10px';
+        row.style.borderRadius = '10px';
+        row.style.background = 'rgba(15,23,42,0.9)';
+        row.style.border = '1px solid rgba(55,65,81,0.9)';
+
+        const left = document.createElement('div');
+        left.style.display = 'flex';
+        left.style.flexDirection = 'column';
+
+        const nameEl = document.createElement('div');
+        nameEl.textContent = item.title;
+        nameEl.style.fontWeight = '500';
+        left.appendChild(nameEl);
+
+        const sub = document.createElement('div');
+        sub.style.fontSize = '11px';
+        sub.style.color = '#9ca3af';
+
+        const curText = item.getCurrentText(level);
+        const nextText = item.getNextText(level);
+        sub.textContent = `当前：${curText}   →   下一级：${nextText}（每次 ${item.getEffectText()}，价格：${CHALLENGE_UPGRADE_COST} 分）`;
+        left.appendChild(sub);
+
+        const right = document.createElement('div');
+
+        const btn = document.createElement('button');
+        btn.style.minWidth = '120px';
+        btn.style.padding = '6px 10px';
+        btn.style.borderRadius = '999px';
+        btn.style.border = '1px solid rgba(96,165,250,0.9)';
+        btn.style.background = 'rgba(15,23,42,0.95)';
+        btn.style.color = '#e5e7eb';
+        btn.style.cursor = 'pointer';
+        btn.style.fontSize = '12px';
+
+        const cost = CHALLENGE_UPGRADE_COST;
+        if (scoreVal >= cost) {
+            btn.textContent = `使用 ${cost} 分购买`;
+            btn.onmouseenter = () => { btn.style.background = 'rgba(37,99,235,0.95)'; };
+            btn.onmouseleave = () => { btn.style.background = 'rgba(15,23,42,0.95)'; };
+            btn.onclick = () => {
+                if (typeof state.score !== 'number') state.score = 0;
+                if (state.score < cost) {
+                    renderChallengeTerminalRows();
+                    return;
+                }
+                state.score -= cost;
+                state.challengeTerminal[item.levelKey] = (state.challengeTerminal[item.levelKey] || 0) + 1;
+
+                const newLevel = state.challengeTerminal[item.levelKey];
+
+                if (item.id === 'hp') {
+                    const newMax = baseMaxHealth + newLevel * CHALLENGE_HP_STEP;
+                    state.maxHealth = newMax;
+                    if (typeof state.health !== 'number') state.health = newMax;
+                    const healAmount = 30;
+                    state.health = Math.min(state.health + healAmount, state.maxHealth);
+                } else if (item.id === 'dmg') {
+                    const mult = 1 + newLevel * CHALLENGE_DMG_STEP;
+                    state.challengeDamageMultiplier = mult;
+                } else if (item.id === 'ammo') {
+                    const mult = 1 + newLevel * CHALLENGE_AMMO_STEP;
+                    state.challengeReserveAmmoMultiplier = mult;
+
+                    // 使用记录下来的基础上限重新计算本局最大备用弹药
+                    const newMaxReserve = Math.round(baseMaxReserve * mult);
+                    state.maxReserveAmmo = newMaxReserve;
+                    // 不强行补满，只保证当前备用弹药不超过新上限
+                    if (typeof state.reserveAmmo === 'number') {
+                        state.reserveAmmo = Math.min(state.reserveAmmo, state.maxReserveAmmo);
+                    }
+                }
+
+                renderChallengeTerminalRows();
+            };
+        } else {
+            btn.textContent = '分数不足';
+            btn.disabled = true;
+            btn.style.opacity = '0.6';
+            btn.style.borderColor = 'rgba(75,85,99,0.9)';
+            btn.style.cursor = 'default';
+        }
+
+        right.appendChild(btn);
+        row.appendChild(left);
+        row.appendChild(right);
+        list.appendChild(row);
+    }
+}
+
+export function openChallengeTerminalUI() {
+    if (typeof document === 'undefined') return;
+    ensureChallengeTerminalState();
+    const overlay = getOrCreateChallengeTerminalOverlay();
+    const panel = getOrCreateChallengeTerminalPanel();
+    if (!panel.parentNode) overlay.appendChild(panel);
+    overlay.style.display = 'flex';
+    renderChallengeTerminalRows();
+    state.isPaused = true;
+
+    // 打开终端时：如果当前已锁定指针，先记录并解除锁定以显示鼠标
+    wasPointerLockedBeforeTerminal = (document.pointerLockElement === document.body);
+    if (wasPointerLockedBeforeTerminal && document.exitPointerLock) {
+        document.exitPointerLock();
+    }
+
+    // 隐藏 F 交互提示，避免与终端 UI 重叠
+    if (interactHintEl) {
+        interactHintEl.style.opacity = '0';
+        interactHintEl.style.transform = 'translateX(-50%) translateY(4px)';
+    }
+}
+
+export function closeChallengeTerminalUI() {
+    if (challengeTerminalOverlayEl) {
+        challengeTerminalOverlayEl.style.display = 'none';
+    }
+    state.isPaused = false;
+
+    // 关闭终端后：如果之前处于指针锁定状态，则尝试恢复
+    if (wasPointerLockedBeforeTerminal && typeof document !== 'undefined') {
+        const canvas = document.querySelector('canvas');
+        if (canvas && canvas.requestPointerLock) {
+            canvas.requestPointerLock();
+        }
+    }
 }
 
 // 统一的成就配置生成函数
@@ -309,7 +639,7 @@ export function addScore(amount) {
     if (state.selectedDifficulty === 'hard') {
         scoreMultiplier = 1.5; // 中等难度分数提升50%
     } else if (state.selectedDifficulty === 'insane') {
-        scoreMultiplier = 2.0; // 困难难度分数翻倍
+        scoreMultiplier = 3.0; // 疯狂难度分数为基础值的3倍
     }
     
     const finalAmount = Math.round(amount * scoreMultiplier);
@@ -331,8 +661,20 @@ export function addScore(amount) {
 }
 
 export function showHitmarker(isHead) {
+    console.log(`🎯 击中反馈触发: ${isHead ? '爆头' : '身体'}`);
     const el = document.getElementById('hit-feedback');
     const lines = el.querySelectorAll('.hit-line');
+    
+    if (!el) {
+        console.warn('❌ 击中反馈元素未找到: #hit-feedback');
+        return;
+    }
+    if (lines.length === 0) {
+        console.warn('❌ 击中反馈线条未找到: .hit-line');
+        return;
+    }
+    
+    console.log(`✅ 击中反馈元素找到: ${lines.length} 条线条`);
     
     if (isHead) {
         lines.forEach(l => {

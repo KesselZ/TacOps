@@ -6,11 +6,12 @@ import { state } from './globals.js';
 import { CONFIG } from './config.js';
 import { playEquipSound } from './audio.js';
 import { hideGlobalLoading } from './ui.js';
-import { generateCityScene, CITY_GRID_CONFIG } from './cityGenerator.js';
-import { createMapGenerator } from './mapGenerator.js';
+import { generateCityScene, CITY_GRID_CONFIG, setCityMapContext } from './cityGenerator.js';
+import { createMapContext } from './mapConfigFactory.js';
 import { collisionGrid } from './collisionGrid.js';
 import { toggleBackpack } from './backpackUI.js';
 import { generateContainerLoot } from './lootTables.js';
+import { openChallengeTerminalUI } from './ui.js';
 
 // Assuming CANNON is globally available via script tag in index.html
 const CANNON = window.CANNON;
@@ -691,6 +692,91 @@ function preselectEnemySpawnPoints() {
     }
 }
 
+// ================== 血包拾取 ==================
+export function createHealthPickup(position, amount = null) {
+    // 随机 5-30 血量，除非调用方指定
+    if (amount === null) {
+        amount = 5 + Math.floor(Math.random() * 26); // 5-30
+    }
+
+    if (!Array.isArray(state.healthPickups)) {
+        state.healthPickups = [];
+    }
+
+    const geo = new THREE.BoxGeometry(0.35, 0.2, 0.35);
+    const mat = state.mats.health || (state.mats.health = new THREE.MeshStandardMaterial({
+        color: 0x4ade80,          // 绿色
+        emissive: 0x22c55e,
+        emissiveIntensity: 0.7
+    }));
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(position.x, 0.25, position.z);
+    mesh.castShadow = true;
+    state.scene.add(mesh);
+    state.healthPickups.push({ mesh, amount });
+}
+
+export function updateHealthPickups(dt) {
+    if (!Array.isArray(state.healthPickups) || state.healthPickups.length === 0) return;
+    if (!state.playerBody) return;
+
+    for (let i = state.healthPickups.length - 1; i >= 0; i--) {
+        const p = state.healthPickups[i];
+        const mesh = p.mesh;
+        if (!mesh) { state.healthPickups.splice(i, 1); continue; }
+
+        mesh.rotation.y += dt * 2;
+
+        const dx = state.playerBody.position.x - mesh.position.x;
+        const dz = state.playerBody.position.z - mesh.position.z;
+        const dy = state.playerBody.position.y - mesh.position.y;
+        const distSq = dx * dx + dz * dz;
+
+        const pullRadius = 4.0;   // 开始吸附的半径
+        const pickupRadius = 0.8; // 贴身时判定拾取
+
+        // 在一定范围内开始朝玩家位置插值移动，形成“被吸过来”的感觉
+        if (distSq < pullRadius * pullRadius && Math.abs(dy) < 2.5) {
+            const target = state.playerBody.position;
+            const lerpFactor = Math.min(1, dt * 8); // 吸附速度
+            mesh.position.lerp(target, lerpFactor);
+        }
+
+        // 非常接近玩家时真正结算回血和移除拾取物
+        const closeDx = state.playerBody.position.x - mesh.position.x;
+        const closeDz = state.playerBody.position.z - mesh.position.z;
+        const closeDistSq = closeDx * closeDx + closeDz * closeDz;
+        if (closeDistSq < pickupRadius * pickupRadius && Math.abs(dy) < 2.5) {
+            const maxHp = typeof state.maxHealth === 'number' ? state.maxHealth : 100;
+            const before = state.health;
+            if (before < maxHp) {
+                const heal = Math.min(p.amount, maxHp - before);
+                state.health = Math.min(maxHp, before + heal);
+                console.log(`💚 Health pickup: +${heal}, ${before} -> ${state.health}`);
+                // 更新 UI
+                try {
+                    const { updateUI } = require('./ui.js');
+                    updateUI();
+                } catch (e) {
+                    // 防止循环依赖报错，忽略即可
+                }
+                // 播放拾取音效（与弹药相同的装备音效）
+                try {
+                    const { playEquipSound } = require('./audio.js');
+                    playEquipSound()?.catch?.(() => {});
+                } catch (e) {
+                    // 忽略音效错误，避免影响游戏逻辑
+                }
+            }
+
+            state.scene.remove(mesh);
+            if (mesh.geometry) mesh.geometry.dispose();
+            if (mesh.material) mesh.material.dispose();
+            state.healthPickups.splice(i, 1);
+        }
+    }
+}
+
 export function buildArenaLevel() {
     if (!state.scene || !state.world || !state.mats || !state.physicsMaterial) return;
 
@@ -1153,9 +1239,15 @@ export function handleUseKey() {
     // 2) 若当前聚焦目标是一个简单容器，则打开测试用容器界面
     const f = state.focusedInteractable;
     if (f && f.type === 'container') {
+        const containerType = f.containerType || 'defaultContainer';
+
+        if (containerType === 'challenge_terminal') {
+            openChallengeTerminalUI();
+            return true;
+        }
+
         // 使用 containerId 作为稳定 key：每个具体箱子只在第一次打开时 roll 一次内容
         const containerId = f.containerId || 'test_container';
-        const containerType = f.containerType || 'defaultContainer';
 
         if (!state.containersById) state.containersById = {};
 
@@ -1293,16 +1385,37 @@ export function buildLevel(difficulty = 'normal') {
     const buildStart = performance.now();
     console.log(`🏗️ buildLevel: 开始构建随机地图 (难度: ${difficulty})...`);
 
+    // 挑战模式使用手写地图，其他模式清空selectedMapId确保使用随机城市
+    if (difficulty === 'challenge') {
+        state.selectedMapId = 'handmade:default_plaza';
+    } else {
+        state.selectedMapId = null; // 确保普通模式走随机城市
+    }
+
     // 更新环境设置（随机天空模式）
     updateEnvironmentSettings(difficulty);
 
     // 清空静态物理网格引用，避免已销毁的 mesh 残留导致空气墙
     state.staticPhysicsMeshes.length = 0;
 
-    // 根据城市街区配置动态计算地板/碰撞网格尺寸
+    // 决定本次使用的地图上下文（随机 / 手写）
+    const tMapCtxStart = performance.now();
+    const mapCtx = createMapContext(state.selectedMapId || 'random_city');
+    const mapConfig = mapCtx.mapConfig;
+    const mapLabel = mapCtx.label || 'random_city';
+    const tMapCtxEnd = performance.now();
+    console.log(`🗺️ buildLevel: 地图上下文=${mapLabel}, 类型=${mapCtx.kind}, 耗时=${(tMapCtxEnd - tMapCtxStart).toFixed(2)}ms`);
+
+    // 让城市场景生成器使用当前 mapConfig + 随机源
+    setCityMapContext(mapConfig, mapCtx.randomFunc);
+
+    // 根据地图决定地板/碰撞网格尺寸
     const tSizeStart = performance.now();
     const { blockSize, roadWidth, gridSize } = CITY_GRID_CONFIG;
-    const cityTotalSize = gridSize * (blockSize + roadWidth) - roadWidth;
+    let cityTotalSize = gridSize * (blockSize + roadWidth) - roadWidth;
+    if (mapConfig?.bounds?.width && mapConfig?.bounds?.depth) {
+        cityTotalSize = Math.max(mapConfig.bounds.width, mapConfig.bounds.depth);
+    }
     const cityHalfSize = cityTotalSize / 2;
     const tSizeEnd = performance.now();
 
@@ -1321,18 +1434,6 @@ export function buildLevel(difficulty = 'normal') {
         state.usedSpawnPointIndices.clear();
     }
     state.enemySpawnIndices = [];
-    
-    // 每次构建关卡时创建新的地图生成器实例，确保新的随机种子
-    const tMapGenStart = performance.now();
-    const mapGenerator = createMapGenerator();
-    const tMapGenEnd = performance.now();
-    console.log(`🎲 buildLevel: 新的地图生成器已创建，种子: ${mapGenerator.seed.toFixed(2)}, 耗时=${(tMapGenEnd - tMapGenStart).toFixed(2)}ms`);
-    
-    // 生成随机地图配置
-    const tMapCfgStart = performance.now();
-    const mapConfig = mapGenerator.generateMapConfig();
-    const tMapCfgEnd = performance.now();
-    console.log(`🧩 buildLevel: 生成地图配置耗时=${(tMapCfgEnd - tMapCfgStart).toFixed(2)}ms`);
     
     // 保存地图配置供其他函数使用
     state.currentMapConfig = mapConfig;
@@ -1428,7 +1529,7 @@ export function buildLevel(difficulty = 'normal') {
     
     // 设置玩家出生点（在生成点注册之后，使用种子随机）
     const tPlayerSpawnStart = performance.now();
-    setRandomPlayerSpawn(mapGenerator.random);
+    setRandomPlayerSpawn(mapCtx.randomFunc);
     const tPlayerSpawnEnd = performance.now();
     console.log(`🎮 buildLevel: 设置玩家出生点耗时=${(tPlayerSpawnEnd - tPlayerSpawnStart).toFixed(2)}ms`);
     
@@ -2135,6 +2236,11 @@ export function resetWorldRuntime() {
     // 重置状态数组
     state.spawnPoints = [];
     state.enemies = [];
+    
+    // 重置挑战模式边缘生成状态，确保每局游戏从头开始
+    state.edgeSpawnState = null;
+    state.enemyEdgeSpawnTimer = 0;
+    console.log('✅ 重置挑战模式边缘生成状态');
     
     console.log(`✅ 总共清理了 ${removedCount} 个场景对象`);
     console.log('🧹 世界清理完成！');

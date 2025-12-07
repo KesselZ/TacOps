@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { state } from './globals.js';
 import { CONFIG } from './config.js';
 import { endGame } from './main.js';
-import { createAmmoPickup, spawnDebris } from './world.js';
+import { createAmmoPickup, createHealthPickup, spawnDebris } from './world.js';
 import { playEnemyProximitySound } from './audio.js';
 import { Bullet, Rocket, SpecialBullet } from './weapon.js';
 import { applyPlayerHit } from './playerHit.js';
@@ -76,6 +76,24 @@ function pickEnemyTypeByDifficulty() {
     const difficulty = state.selectedDifficulty || 'normal';
     const r = Math.random();
 
+    if (difficulty === 'challenge') {
+        // 挑战模式：兵种比例随时间从 "默认" 过渡到更危险的组合
+        // 起始（t=0）：melee 40%, pistol 40%, rocket 15%, special 5%
+        // 终点（t=1）：melee 30%, pistol 30%, rocket 25%, special 15%
+        const t = Math.max(0, Math.min(1, state.challengeSpawnProgressRatio || 0));
+
+        const meleeP   = 0.40 + (0.30 - 0.40) * t; // 0.40 -> 0.30
+        const pistolP  = 0.40 + (0.30 - 0.40) * t; // 0.40 -> 0.30
+        const rocketP  = 0.15 + (0.25 - 0.15) * t; // 0.15 -> 0.25
+        const specialP = 0.05 + (0.15 - 0.05) * t; // 0.05 -> 0.15
+
+        // 累积分布抽样
+        if (r < meleeP) return 'melee';
+        if (r < meleeP + pistolP) return 'pistol';
+        if (r < meleeP + pistolP + rocketP) return 'rocket';
+        return 'special';
+    }
+
     if (difficulty === 'insane') {
         // 疯狂：高级兵种为主
         // melee 5%, pistol 25%, rocket 35%, special 35%
@@ -119,8 +137,10 @@ export class Enemy {
         this.lastLosCheck = 0; // 上次视线检测时间
         this.losCheckInterval = 50; // 每50毫秒检测一次视线
         this.lastCanSeePlayer = false; // 缓存上次检测结果
-        this.isAlerted = false; // 是否被警戒
-        this.alertRadius = 50; // 警戒范围（米）
+        // 挑战模式下敌人生成即激活（无需视线检测），普通模式需要先看到玩家
+        this.isAlerted = state.selectedDifficulty === 'challenge' ? true : false;
+        // 挑战模式下敌人全图感知（200米），普通模式50米
+        this.alertRadius = state.selectedDifficulty === 'challenge' ? 200 : 50;
         this.alertIcon = null; // 警戒感叹号图标
         this.alertStartTime = null; // 开始满足警戒条件的时间，用于延迟触发
         // 出生时间：用于在生成后的前几帧内强制保持物理激活，避免还在落地过程中就被移除刚体
@@ -261,7 +281,10 @@ export class Enemy {
         
         // 根据难度调整血量
         let difficultyMultiplier = 1.0;
-        if (state.selectedDifficulty === 'hard') {
+        if (state.selectedDifficulty === 'challenge') {
+            // 挑战模式：使用动态难度倍率（1x 到 3x，5分钟达到顶峰）
+            difficultyMultiplier = state.challengeDifficultyMultiplier || 1.0;
+        } else if (state.selectedDifficulty === 'hard') {
             difficultyMultiplier = 2.0; // 中等难度血量翻倍
         } else if (state.selectedDifficulty === 'insane') {
             difficultyMultiplier = 4.0; // 困难难度血量4倍
@@ -276,6 +299,12 @@ export class Enemy {
             baseHp = 300;      // 特种兵
         }
         this.hp = Math.round(baseHp * difficultyMultiplier);
+        
+        // 挑战模式：存储伤害倍率供攻击时使用
+        this.damageMultiplier = state.selectedDifficulty === 'challenge' 
+            ? (state.challengeDifficultyMultiplier || 1.0) 
+            : 1.0;
+        
         state.enemies.push(this);
         
             }
@@ -730,8 +759,13 @@ export class Enemy {
     }
 
     die() {
+        // 25% 概率掉落弹药箱
         if (Math.random() < 0.25) {
             createAmmoPickup(this.body.position);
+        }
+        // 50% 概率掉落血包（恢复 5-30 HP）
+        if (Math.random() < 0.5) {
+            createHealthPickup(this.body.position);
         }
         
         // 🆕 从碰撞网格中移除
@@ -803,7 +837,242 @@ export function spawnEnemy() {
     new Enemy(x, z, type);
 }
 
-// 基于玩家位置，按需在一定半径内动态生成敌人
+// 挑战模式：在地图边缘固定位置生成敌人（难度随时间递增）
+export function updateEnemySpawnsAtEdges() {
+    // 初始化挑战模式开始时间
+    if (!state.challengeStartTime) {
+        state.challengeStartTime = performance.now();
+    }
+    
+    // 计算游戏进行时间（秒）
+    const elapsedSeconds = (performance.now() - state.challengeStartTime) / 1000;
+    const maxTime = 300; // 5分钟（300秒）达到顶峰
+    const progressRatio = Math.min(elapsedSeconds / maxTime, 1.0); // 0 到 1 的进度
+
+    // 暴露给兵种选择逻辑使用（挑战模式兵种比例插值）
+    state.challengeSpawnProgressRatio = progressRatio;
+    
+    // === 动态生成间隔：从 2 秒逐渐降到 0.3 秒 ===
+    const spawnIntervalStart = 2.0;   // 初始间隔
+    const spawnIntervalEnd = 0.3;     // 最终间隔
+    const currentSpawnInterval = spawnIntervalStart - (spawnIntervalStart - spawnIntervalEnd) * progressRatio;
+    
+    if (!state.enemyEdgeSpawnTimer) state.enemyEdgeSpawnTimer = 0;
+    const dt = state.frameDt || 0;
+    state.enemyEdgeSpawnTimer += dt;
+    if (state.enemyEdgeSpawnTimer < currentSpawnInterval) return;
+    state.enemyEdgeSpawnTimer -= currentSpawnInterval;
+    
+    if (!state.isGameActive || !state.playerBody || !state.currentMapConfig) return;
+
+    // === 动态敌人上限：从 50 增加到 150 ===
+    const maxEnemiesStart = 50;
+    const maxEnemiesEnd = 150;
+    const maxEnemies = Math.floor(maxEnemiesStart + (maxEnemiesEnd - maxEnemiesStart) * progressRatio);
+    if (state.enemies.length >= maxEnemies) return;
+    
+    // === 每次生成的敌人数量：从 1 增加到 3 ===
+    const spawnCountStart = 1;
+    const spawnCountEnd = 3;
+    const spawnCount = Math.floor(spawnCountStart + (spawnCountEnd - spawnCountStart) * progressRatio);
+    
+    // 存储难度倍率供 Enemy 构造函数和弹药使用
+    // 伤害倍率从 0.5x 线性提升到 1.2x（5分钟）
+    state.challengeDifficultyMultiplier = 0.5 + (1.2 - 0.5) * progressRatio; // 0.5x -> 1.2x
+
+    // === 敌人生成逻辑（在墙外门洞对应位置生成）===
+    // 获取地图边界信息
+    const bounds = state.currentMapConfig.bounds || { width: 600, depth: 600 };
+    const halfWidth = bounds.width / 2;
+    const halfDepth = bounds.depth / 2;
+    
+    // 围墙参数（必须与 cityGenerator.js 中的 createBoundaryWalls 保持一致）
+    const wallOffset = 5;           // 墙距离边缘的内缩距离
+    const spawnDistance = 15;       // 敌人在墙外多远生成
+    
+    // 墙的位置
+    const wallPosX = halfWidth - wallOffset;
+    const wallPosZ = halfDepth - wallOffset;
+    
+    // 敌人生成位置（在墙外）
+    const spawnOutsideX = wallPosX + spawnDistance;  // 墙外 X
+    const spawnOutsideZ = wallPosZ + spawnDistance;  // 墙外 Z
+    
+    // 门洞位置（每面墙两个门，在墙的 ±50% 位置）
+    const gateOffset = wallPosX * 0.5;  // 门的 X/Z 偏移
+    
+    // 8个门洞对应的生成点（敌人在门洞正对面的墙外生成）
+    const gateSpawnPoints = [
+        // 北墙两个门（z 在墙外北侧）
+        { x: -gateOffset, z: -spawnOutsideZ, side: 'north1' },
+        { x: gateOffset, z: -spawnOutsideZ, side: 'north2' },
+        // 南墙两个门（z 在墙外南侧）
+        { x: -gateOffset, z: spawnOutsideZ, side: 'south1' },
+        { x: gateOffset, z: spawnOutsideZ, side: 'south2' },
+        // 西墙两个门（x 在墙外西侧）
+        { x: -spawnOutsideX, z: -gateOffset, side: 'west1' },
+        { x: -spawnOutsideX, z: gateOffset, side: 'west2' },
+        // 东墙两个门（x 在墙外东侧）
+        { x: spawnOutsideX, z: -gateOffset, side: 'east1' },
+        { x: spawnOutsideX, z: gateOffset, side: 'east2' }
+    ];
+    
+    // 所有生成点就是 8 个门洞
+    const allSpawnPoints = gateSpawnPoints;
+    
+    // 获取玩家位置，确保生成点与玩家保持安全距离
+    const playerPos = state.playerBody.position;
+    const safeDistance = 50; // 安全距离：50米（敌人在墙外生成，玩家通常看不到）
+    
+    // 筛选安全的生成点（远离玩家）
+    const safeSpawnPoints = allSpawnPoints.filter(point => {
+        const dx = point.x - playerPos.x;
+        const dz = point.z - playerPos.z;
+        const distSq = dx * dx + dz * dz;
+        return distSq && Math.sqrt(distSq) >= safeDistance;
+    });
+    
+    if (safeSpawnPoints.length === 0) return; // 没有安全的生成点
+    
+    // 生成 spawnCount 个敌人
+    for (let i = 0; i < spawnCount; i++) {
+        // 检查是否达到上限
+        if (state.enemies.length >= maxEnemies) break;
+        
+        // 根据难度选择敌人类型（使用和PVE模式相同的逻辑）
+        const type = pickEnemyTypeByDifficulty();
+        
+        // 随机选择一个安全的生成点
+        const spawnPoint = safeSpawnPoints[Math.floor(Math.random() * safeSpawnPoints.length)];
+        
+        // 添加小幅随机偏移，避免敌人重叠（但保持在门洞宽度范围内）
+        const jitter = 5; // 5米随机偏移（门洞宽度12米，确保敌人仍在门洞前）
+        const finalX = spawnPoint.x + (Math.random() - 0.5) * jitter * 2;
+        const finalZ = spawnPoint.z + (Math.random() - 0.5) * jitter * 2;
+        
+        // 敌人在墙外生成，不需要 clamp 到地图边界内
+        // 敌人的 AI 会引导它们穿过门洞进入地图
+        
+        // 生成敌人
+        new Enemy(finalX, finalZ, type);
+    }
+    
+    // === 物理激活管理（从PVE模式移植）===
+    // 确保挑战模式敌人也能正确激活物理刚体进行攻击
+    if (!state.enemies || !state.playerBody) return;
+    
+    const activeRadius = 100; // 敌人物理激活半径（米）
+    const activeRadiusSq = activeRadius * activeRadius;
+    const raycastRadius = 200; // 敌人被射线命中/可见的半径（米）
+    const raycastRadiusSq = raycastRadius * raycastRadius;
+    const now = performance.now();
+    
+    for (const enemy of state.enemies) {
+        const ex = enemy.body.position.x - playerPos.x;
+        const ez = enemy.body.position.z - playerPos.z;
+        const distSq = ex * ex + ez * ez;
+        
+        // 动态管理敌人物理刚体（100米范围）
+        let shouldBeActive = distSq <= activeRadiusSq;
+
+        // 出生缓冲：生成后至少1.5秒内强制保持物理激活，避免还在落地过程中就被移除刚体
+        const spawnTime = enemy.spawnTime || 0;
+        if (now - spawnTime < 1500) {
+            shouldBeActive = true;
+        }
+
+        // 初始化 isActive 标记（默认 true）
+        if (enemy.mesh.userData.isActive === undefined) {
+            enemy.mesh.userData.isActive = true;
+        }
+
+        // 确保有标记字段
+        if (enemy.inPhysicsWorld === undefined) {
+            enemy.inPhysicsWorld = true;
+        }
+
+        if (shouldBeActive && !enemy.inPhysicsWorld) {
+            // 重新将刚体加入物理世界
+            state.world.addBody(enemy.body);
+            enemy.inPhysicsWorld = true;
+        } else if (!shouldBeActive && enemy.inPhysicsWorld) {
+            // 从物理世界中移除刚体，但保留 Mesh 与逻辑
+            state.world.removeBody(enemy.body);
+            enemy.inPhysicsWorld = false;
+            // 避免残留速度导致再次加入时出现突变
+            enemy.body.velocity.set(0, 0, 0);
+        }
+
+        // 敌人被射线命中的可见范围：独立于物理刚体，使用更大的 200 米
+        enemy.mesh.userData.isActive = distSq <= raycastRadiusSq;
+    }
+}
+
+// 更新所有敌人的行为
+export function updateEnemies(dt) {
+    // 遍历所有敌人并调用它们的更新方法
+    for (const enemy of state.enemies) {
+        if (enemy && typeof enemy.update === 'function') {
+            enemy.update();
+        }
+    }
+    
+    // === 碰撞检测系统更新 ===
+    // 确保敌人对射线检测可见（每帧更新，支持所有敌人生成模式）
+    if (!state.enemies || !state.playerBody) return;
+    
+    const playerPos = state.playerBody.position;
+    const raycastRadius = 200; // 敌人射线检测可见范围：200米
+    const raycastRadiusSq = raycastRadius * raycastRadius;
+    const now = performance.now();
+    
+    // 更新每个敌人的活跃状态
+    for (const enemy of state.enemies) {
+        const ex = enemy.body.position.x - playerPos.x;
+        const ez = enemy.body.position.z - playerPos.z;
+        const distSq = ex * ex + ez * ez;
+        
+        // 敌人被射线命中的可见范围：独立于物理刚体，使用更大的 200 米
+        enemy.mesh.userData.isActive = distSq <= raycastRadiusSq;
+    }
+
+    // 维护活跃动态物体数组（用于射线检测优化）
+    state.activeDynamicMeshes.length = 0; // 清空数组
+    
+    // 玩家永远活跃
+    if (state.playerMesh && state.playerMesh.userData.isActive) {
+        state.activeDynamicMeshes.push(state.playerMesh);
+    }
+    
+    // 添加活跃敌人的所有子Mesh
+    for (const enemy of state.enemies) {
+        if (enemy.mesh.userData.isActive) {
+            enemy.mesh.traverse(child => {
+                if (child.isMesh) {
+                    state.activeDynamicMeshes.push(child);
+                }
+            });
+        }
+    }
+}
+
+// 根据挑战模式波次选择敌人类型
+function pickEnemyTypeByChallengeWave(wave) {
+    const baseTypes = ['basic', 'fast'];
+    const advancedTypes = ['basic', 'fast', 'heavy'];
+    const eliteTypes = ['fast', 'heavy', 'sniper'];
+    
+    if (wave <= 2) {
+        // 前两波：基础敌人
+        return baseTypes[Math.floor(Math.random() * baseTypes.length)];
+    } else if (wave <= 5) {
+        // 3-5波：加入重甲敌人
+        return advancedTypes[Math.floor(Math.random() * advancedTypes.length)];
+    } else {
+        // 6波以后：精英敌人为主
+        return eliteTypes[Math.floor(Math.random() * eliteTypes.length)];
+    }
+}
 export function updateEnemySpawnsAroundPlayer() {
     // 优化：基于时间间隔执行，降低性能开销（每2秒一次）
     if (!state.enemyUpdateTimer) state.enemyUpdateTimer = 0;

@@ -300,10 +300,10 @@ export class Projectile {
                     showHitmarker(isHead);
                     playHitmarkerSound(isHead);
 
-                    let reward = 40;
-                    if (enemy.type === 'pistol') reward = 60;
-                    else if (enemy.type === 'rocket') reward = 100;
-                    else if (enemy.type === 'special') reward = 190;
+                    let reward = 20;
+                    if (enemy.type === 'pistol') reward = 30;
+                    else if (enemy.type === 'rocket') reward = 50;
+                    else if (enemy.type === 'special') reward = 95;
                     addScore(reward);
                     showKill(isHead);
                     recordWeaponKill({
@@ -384,7 +384,10 @@ export class Bullet extends Projectile {
         this.maxDistance = CONFIG.bullet.maxDistance;
         // 
         let difficultyMultiplier = 1.0;
-        if (this.isEnemy && state.selectedDifficulty === 'hard') {
+        if (this.isEnemy && state.selectedDifficulty === 'challenge') {
+            // 挑战模式：使用动态难度倍率（1x 到 3x）
+            difficultyMultiplier = state.challengeDifficultyMultiplier || 1.0;
+        } else if (this.isEnemy && state.selectedDifficulty === 'hard') {
             difficultyMultiplier = 1.5; // 
         } else if (this.isEnemy && state.selectedDifficulty === 'insane') {
             difficultyMultiplier = 2.0; // 
@@ -422,7 +425,10 @@ export class SpecialBullet extends Bullet {
         this.maxDistance = 180;
         // 根据难度调整伤害
         let difficultyMultiplier = 1.0;
-        if (this.isEnemy && state.selectedDifficulty === 'hard') {
+        if (this.isEnemy && state.selectedDifficulty === 'challenge') {
+            // 挑战模式：使用动态难度倍率（1x 到 3x）
+            difficultyMultiplier = state.challengeDifficultyMultiplier || 1.0;
+        } else if (this.isEnemy && state.selectedDifficulty === 'hard') {
             difficultyMultiplier = 1.5; // 中等难度伤害提升50%
         } else if (this.isEnemy && state.selectedDifficulty === 'insane') {
             difficultyMultiplier = 2.0; // 困难难度伤害翻倍
@@ -478,7 +484,10 @@ export class Rocket extends Projectile {
         this.maxDistance = CONFIG.rocket.maxDistance;
         // 根据难度调整伤害
         let difficultyMultiplier = 1.0;
-        if (this.isEnemy && state.selectedDifficulty === 'hard') {
+        if (this.isEnemy && state.selectedDifficulty === 'challenge') {
+            // 挑战模式：使用动态难度倍率（1x 到 3x）
+            difficultyMultiplier = state.challengeDifficultyMultiplier || 1.0;
+        } else if (this.isEnemy && state.selectedDifficulty === 'hard') {
             difficultyMultiplier = 1.5; // 中等难度伤害提升50%
         } else if (this.isEnemy && state.selectedDifficulty === 'insane') {
             difficultyMultiplier = 2.0; // 困难难度伤害翻倍
@@ -1326,7 +1335,12 @@ function fire(time) {
 
                     // 6. 计算最终伤害（含爆头）
                     const headshotMult = state.weaponConfig?.headshotMultiplier || CONFIG.weaponPresets.m4a1.headshotMultiplier || 2.0;
-                    const damage = isHead ? baseDamage * headshotMult : baseDamage;
+                    let damage = isHead ? baseDamage * headshotMult : baseDamage;
+
+                    // 挑战模式下应用终端购买的子弹伤害加成（仅玩家武器命中逻辑会走到这里）
+                    if (state.selectedDifficulty === 'challenge' && state.challengeDamageMultiplier) {
+                        damage *= state.challengeDamageMultiplier;
+                    }
 
                     // 🔍 调试日志
                     console.log(`🎯 命中: 距离=${dist.toFixed(1)}m, 衰减=${startDrop}-${endDrop}m, 倍率=${distMultiplier.toFixed(2)}, 基础=${originalBase}->${baseDamage}, 最终=${damage.toFixed(0)} (爆头倍率:${isHead ? headshotMult : 1.0})`);
@@ -1342,9 +1356,27 @@ function fire(time) {
                         hitLocation: isHead ? 'head' : 'body'
                     });
                     shotRecorded = true;
+                    
+                    // 击中反馈
+                    showHitmarker(isHead);
+                    playHitmarkerSound(isHead);
+
+                    // 若敌人被击杀，则结算得分和击杀统计（与旧逻辑保持一致）
+                    if (enemyKilled) {
+                        let reward = 20;
+                        if (enemy.type === 'pistol') reward = 30;
+                        else if (enemy.type === 'rocket') reward = 50;
+                        else if (enemy.type === 'special') reward = 95;
+                        addScore(reward);
+                        showKill(isHead);
+                        recordWeaponKill({
+                            weaponId,
+                            weaponName,
+                            damage,
+                            score: reward
+                        });
+                    }
                 }
-                showHitmarker(isHead);
-                playHitmarkerSound(isHead);
                 break;
             }
             obj = obj.parent;

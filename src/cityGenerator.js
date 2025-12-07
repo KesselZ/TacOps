@@ -1,43 +1,116 @@
 import * as THREE from 'three';
 import { state } from './globals.js';
 import { CONFIG } from './config.js';
-import { createMapGenerator } from './mapGenerator.js';
 import { collisionGrid } from './collisionGrid.js';
 
 // Assuming CANNON is globally available via script tag in index.html
 const CANNON = window.CANNON;
 
-// 全局mapGenerator实例，每次生成城市时更新
-let currentMapGenerator = null;
+// 当前地图上下文
+let currentRandom = Math.random;
+let currentMapConfig = null;
 
-// 使用种子随机数生成器而不是Math.random()
-function getRandom() {
-    if (!currentMapGenerator) {
-        console.warn('MapGenerator未初始化，使用Math.random()作为后备');
-        return Math.random();
-    }
-    return currentMapGenerator.random();
+// 设置地图上下文（由 buildLevel 传入）
+export function setCityMapContext(mapConfig, randomFunc) {
+    currentMapConfig = mapConfig || null;
+    currentRandom = randomFunc || Math.random;
 }
 
-// 辅助函数：创建箱子
-// withPhysics: 是否创建物理刚体并加入碰撞网格
-function createLocalBox(x, y, z, width, height, depth, material, mass = 0, withPhysics = true) {
+// 使用外部传入的随机数生成器，未设置时回退 Math.random
+function getRandom() { return currentRandom ? currentRandom() : Math.random(); }
+
+// 车辆材质辅助：懒加载更合适的车身和轮胎材质
+function getTireMaterial() {
+    if (state.mats.tire) return state.mats.tire;
+
+    const base = state.mats.metal || state.mats.box || state.mats.building || new THREE.MeshStandardMaterial({ color: 0x222222 });
+    const tire = base.clone();
+    tire.color = new THREE.Color(0x111111);
+    if (typeof tire.roughness === 'number') tire.roughness = 0.9;
+    if (typeof tire.metalness === 'number') tire.metalness = 0.1;
+    state.mats.tire = tire;
+    return state.mats.tire;
+}
+
+// 初始化专用车辆材质（车漆 + 卡车车身）
+function ensureVehicleMaterials() {
+    if (state.mats.carRed && state.mats.carBlue && state.mats.carYellow && state.mats.truckCab && state.mats.truckCargo) {
+        return;
+    }
+
+    const THREERef = THREE; // 避免压缩或重命名问题
+
+    const baseCar = (state.mats.commercial || state.mats.building || state.mats.metal || new THREERef.MeshStandardMaterial({ color: 0xffffff }));
+    const carRed = baseCar.clone();
+    carRed.color = new THREERef.Color(0xcc3333);
+    if (carRed.map) carRed.map = null;
+
+    const carBlue = baseCar.clone();
+    carBlue.color = new THREERef.Color(0x3366cc);
+    if (carBlue.map) carBlue.map = null;
+
+    const carYellow = baseCar.clone();
+    carYellow.color = new THREERef.Color(0xcccc33);
+    if (carYellow.map) carYellow.map = null;
+
+    const baseTruck = (state.mats.industrial || state.mats.metalRoof || baseCar);
+    const truckCab = baseCar.clone();
+    truckCab.color = new THREERef.Color(0x339999);
+    if (truckCab.map) truckCab.map = null;
+
+    const truckCargo = baseTruck.clone();
+    truckCargo.color = new THREERef.Color(0x555555);
+    if (truckCargo.map) truckCargo.map = null;
+
+    state.mats.carRed = state.mats.carRed || carRed;
+    state.mats.carBlue = state.mats.carBlue || carBlue;
+    state.mats.carYellow = state.mats.carYellow || carYellow;
+    state.mats.truckCab = state.mats.truckCab || truckCab;
+    state.mats.truckCargo = state.mats.truckCargo || truckCargo;
+}
+
+function pickCarBodyMaterial() {
+    ensureVehicleMaterials();
+
+    const candidates = [
+        state.mats.carRed,
+        state.mats.carBlue,
+        state.mats.carYellow,
+    ].filter(Boolean);
+
+    if (candidates.length === 0) return state.mats.commercial || state.mats.building || state.mats.box;
+    const idx = Math.floor(getRandom() * candidates.length);
+    return candidates[idx];
+}
+
+// 通用底层工厂：负责 Mesh / userData / 物理刚体 / 碰撞网格的统一管理
+function createLocalPrimitive({
+    x,
+    y,
+    z,
+    geometry,
+    material,
+    mass = 0,
+    withPhysics = true,
+    cannonShape = null,
+    bounds,
+    isRoad = false,
+}) {
     // 安全检查：确保材质存在
     if (!material) {
         console.warn('材质未定义，使用默认材质');
         material = state.mats.concrete || state.mats.building;
     }
-    
-    const geo = new THREE.BoxGeometry(width, height, depth);
-    const mesh = new THREE.Mesh(geo, material);
+
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    
-    // 添加静态/动态标记和边界信息
+
+    // 统一的静态/动态标记和边界信息
     mesh.userData.isStatic = (mass === 0);
     mesh.userData.isDynamic = (mass > 0);
-    mesh.userData.bounds = {x, z, width, depth, height};
+    mesh.userData.bounds = bounds;
     mesh.userData.canDebris = true;
     mesh.userData.debrisColor = material?.userData?.debrisColor || 0x888888;
     mesh.userData.debrisCount = 5;
@@ -45,22 +118,27 @@ function createLocalBox(x, y, z, width, height, depth, material, mass = 0, withP
 
     // 道路（使用 road 材质且为静态刚体）的物理始终保持激活，不参与范围启停
     // 支持克隆的道路材质，确保纵向道路也有碰撞
-    if (mass === 0 && (material === state.mats.road || material?.userData?.isRoadMaterial)) {
+    if (mass === 0 && isRoad) {
         mesh.userData.alwaysActivePhysics = true;
     }
-    
+
     mesh.userData.hasPhysicsBody = !!withPhysics;
     state.scene.add(mesh);
 
     if (withPhysics) {
-        const shape = new CANNON.Box(new CANNON.Vec3(width/2, height/2, depth/2));
         const isStatic = mass === 0;
-        const body = new CANNON.Body({ 
-            mass: mass, 
+        const shape = cannonShape || new CANNON.Box(new CANNON.Vec3(
+            bounds.width / 2,
+            bounds.height / 2,
+            bounds.depth / 2
+        ));
+
+        const body = new CANNON.Body({
+            mass: mass,
             material: state.physicsMaterial,
             collisionFilterGroup: isStatic ? state.collisionGroups.STATIC : state.collisionGroups.ENEMY,
             // 静态刚体仅与玩家/敌人碰撞，不再与其他静态刚体发生碰撞检测
-            collisionFilterMask: isStatic ? 
+            collisionFilterMask: isStatic ?
                 (state.collisionGroups.PLAYER | state.collisionGroups.ENEMY) :
                 (state.collisionGroups.PLAYER | state.collisionGroups.STATIC)
         });
@@ -70,7 +148,7 @@ function createLocalBox(x, y, z, width, height, depth, material, mass = 0, withP
         // 改为惰性激活：静态刚体默认不加入物理世界，仅记录 physicsBody，
         // 由 updateStaticPhysicsAroundPlayer 在靠近玩家时按需 addBody
         mesh.userData.physicsBody = body;
-        
+
         // 道路等 alwaysActivePhysics 的物体需要立即加入物理世界
         if (isStatic && mesh.userData.alwaysActivePhysics) {
             state.world.addBody(body);
@@ -83,6 +161,72 @@ function createLocalBox(x, y, z, width, height, depth, material, mass = 0, withP
         if (isStatic) {
             collisionGrid.addStaticObject(mesh);
         }
+    }
+
+    return mesh;
+}
+
+// 辅助函数：创建箱子（保留原有行为，仅委托给通用工厂）
+// withPhysics: 是否创建物理刚体并加入碰撞网格
+function createLocalBox(x, y, z, width, height, depth, material, mass = 0, withPhysics = true) {
+    const geometry = new THREE.BoxGeometry(width, height, depth);
+
+    return createLocalPrimitive({
+        x,
+        y,
+        z,
+        geometry,
+        material,
+        mass,
+        withPhysics,
+        // Box 使用与之前完全一致的 bounds 定义
+        bounds: { x, z, width, depth, height },
+        isRoad: (mass === 0 && (material === state.mats.road || material?.userData?.isRoadMaterial)),
+        // 不传 cannonShape，内部默认使用 CANNON.Box，与原实现一致
+    });
+}
+
+// 示例：创建球体（与 Box 共享同一套管理逻辑）
+function createLocalSphere(x, y, z, radius, material, mass = 0, withPhysics = true) {
+    const geometry = new THREE.SphereGeometry(radius, 16, 16);
+    const cannonShape = new CANNON.Sphere(radius);
+
+    return createLocalPrimitive({
+        x,
+        y,
+        z,
+        geometry,
+        material,
+        mass,
+        withPhysics,
+        cannonShape,
+        bounds: { x, z, width: radius * 2, depth: radius * 2, height: radius * 2 },
+        isRoad: false,
+    });
+}
+
+// 轮胎：使用圆柱体作为可见形状，物理仍然使用包围盒近似，保持管理逻辑一致
+function createLocalTire(x, y, z, radius, thickness, material, mass = 0, withPhysics = true) {
+    // CylinderGeometry(顶部半径, 底部半径, 高度, 分段)
+    const geometry = new THREE.CylinderGeometry(radius, radius, thickness, 16);
+
+    const mesh = createLocalPrimitive({
+        x,
+        y,
+        z,
+        geometry,
+        material,
+        mass,
+        withPhysics,
+        // 使用包围盒近似轮胎，足够作为掩体和碰撞
+        bounds: { x, z, width: radius * 2, depth: radius * 2, height: thickness },
+        isRoad: false,
+    });
+
+    // 将圆柱横放，使其更像轮胎：
+    // 默认 Cylinder 轴向为 Y，这里旋转到沿 Z 轴，使圆面朝向 +Z / -Z（车侧面）
+    if (mesh) {
+        mesh.rotation.x = Math.PI / 2;
     }
 
     return mesh;
@@ -871,10 +1015,8 @@ function createParkBench(x, z, rotation = 0, materialOverride = null) {
 function createBush(x, z) {
     // 灌木丛大小变化
     const bushWidth = 1.5 + getRandom() * 1; // 1.5-2.5米宽
-    const bushHeight = 0.8 + getRandom() * 0.4; // 0.8-1.2米高
     const bushDepth = 1.5 + getRandom() * 1; // 1.5-2.5米深
-    
-    // 使用共享的树叶材质，避免为每丛灌木创建独立材质实例
+    const bushHeight = 1.2 + getRandom() * 0.8; // 1.2-2.0米高
     const bushMaterial = state.mats.treeLeaf;
     
     // 灌木主体（不规则椭圆形状，用多个盒子组合）
@@ -886,6 +1028,515 @@ function createBush(x, z) {
     createLocalBox(x + offsetX1, bushHeight * 0.7, z + offsetZ1, bushWidth * 0.6, bushHeight * 0.5, bushDepth * 0.6, bushMaterial, 0);
 }
 
+// 创建路灯（direction: 0=+X, 1=+Z, 2=-X, 3=-Z）
+function createLamp(x, z, direction = 0) {
+    // 灯柱（深灰色金属）
+    const poleHeight = 6;
+    const poleWidth = 0.3;
+    createLocalBox(x, poleHeight / 2, z, poleWidth, poleHeight, poleWidth, state.mats.metal, 0);
+    
+    // 灯臂和灯泡位置根据方向计算
+    const armLength = 2;
+    const armWidth = 0.2;
+    const armHeight = 0.2;
+    const lampSize = 0.8;
+    
+    // 根据方向确定偏移
+    let armOffsetX = 0, armOffsetZ = 0;
+    let armW = armLength, armD = armWidth;
+    
+    switch (direction % 4) {
+        case 0: // +X
+            armOffsetX = armLength / 2;
+            break;
+        case 1: // +Z
+            armOffsetZ = armLength / 2;
+            armW = armWidth;
+            armD = armLength;
+            break;
+        case 2: // -X
+            armOffsetX = -armLength / 2;
+            break;
+        case 3: // -Z
+            armOffsetZ = -armLength / 2;
+            armW = armWidth;
+            armD = armLength;
+            break;
+    }
+    
+    // 灯臂
+    createLocalBox(x + armOffsetX, poleHeight - 0.5, z + armOffsetZ, armW, armHeight, armD, state.mats.metal, 0);
+    
+    // 灯泡（在灯臂末端）
+    createLocalBox(x + armOffsetX * 2, poleHeight - 0.5, z + armOffsetZ * 2, lampSize, lampSize, lampSize, state.mats.lampBulb, 0);
+}
+
+// 创建草地区域
+function createGrassArea(x, z, width, depth) {
+    const grassMat = state.mats.grass || state.mats.treeLeaf;
+    createLocalBox(x, 0.05, z, width, 0.1, depth, grassMat, 0, false); // 无物理，仅视觉
+}
+
+// 创建街边箱子（掩体）
+function createStreetCrate(x, z, size = 1.0) {
+    const crateHeight = size * 0.8;
+    const crateMaterial = state.mats.box || state.mats.metal;
+    
+    // 木箱主体
+    createLocalBox(x, crateHeight / 2, z, size, crateHeight, size, crateMaterial, 0);
+    
+    // 添加金属条带装饰
+    const stripWidth = size * 0.1;
+    const stripHeight = crateHeight;
+    createLocalBox(x, stripHeight / 2, z, stripWidth, stripHeight, size, state.mats.metal, 0);
+    createLocalBox(x, stripHeight / 2, z, size, stripHeight, stripWidth, state.mats.metal, 0);
+}
+
+// 创建可交互战利品箱子（摸金箱子）
+function createLootChest(x, z, id, type = 'challenge_crate') {
+    const size = 2.2;
+    const height = 1.4;
+    const mat = state.mats.box || state.mats.metal;
+
+    const mesh = createLocalBox(x, height / 2, z, size, height, size, mat, 0);
+    if (mesh && mesh.userData) {
+        mesh.userData.isContainer = true;
+        mesh.userData.containerId = id;
+        mesh.userData.containerType = type; // lootTables 中未命中时会fallback到 defaultContainer
+    }
+}
+
+// 挑战模式专用终端（替代箱子）：高柱体 + 顶部发光屏幕
+function createChallengeTerminal(x, z, id) {
+    const baseSize = 1.8;
+    const baseHeight = 0.4;
+    const pillarHeight = 2.2;
+    const pillarWidth = 0.9;
+    const screenWidth = 1.2;
+    const screenHeight = 0.9;
+    const screenThickness = 0.1;
+
+    const baseMat = state.mats.road || state.mats.metal;
+    const pillarMat = state.mats.metal || state.mats.box;
+    const screenMat = state.mats.lampBulb || state.mats.treeLeaf;
+
+    // 基座
+    createLocalBox(x, baseHeight / 2, z, baseSize, baseHeight, baseSize, baseMat, 0);
+
+    // 立柱
+    const pillar = createLocalBox(x, baseHeight + pillarHeight / 2, z, pillarWidth, pillarHeight, pillarWidth, pillarMat, 0);
+
+    // 顶部屏幕（略微偏向街道方向：这里沿 -Z 方向）
+    const screenOffsetZ = -pillarWidth;
+    const screenY = baseHeight + pillarHeight - screenHeight * 0.3;
+    const screen = createLocalBox(
+        x,
+        screenY,
+        z + screenOffsetZ,
+        screenWidth,
+        screenHeight,
+        screenThickness,
+        screenMat,
+        0
+    );
+
+    // 将立柱作为交互根节点（终端本体）
+    const mesh = pillar;
+    if (mesh && mesh.userData) {
+        mesh.userData.isContainer = true;
+        mesh.userData.containerId = id;
+        mesh.userData.containerType = 'challenge_terminal';
+    }
+
+    // 标记屏幕也可被射线命中，并向上追溯到立柱
+    if (screen && !screen.userData) screen.userData = {};
+    if (screen && screen.userData) {
+        screen.userData.isContainer = true;
+        screen.userData.containerId = id;
+        screen.userData.containerType = 'challenge_terminal';
+    }
+}
+
+// 创建小汽车（rotation: 0=沿X轴, 1=沿Z轴）
+function createCar(x, z, color = 'random', rotation = 0) {
+    // 车身尺寸
+    let carLength = 4.5;
+    let carWidth = 2.0;
+    const carHeight = 0.75;
+    
+    // 如果旋转90度，交换长宽
+    if (rotation === 1) {
+        [carLength, carWidth] = [carWidth, carLength];
+    }
+    
+    // 选择车身颜色
+    let carMaterial;
+    if (color === 'random') {
+        carMaterial = pickCarBodyMaterial();
+    } else {
+        carMaterial = state.mats.commercial || pickCarBodyMaterial();
+    }
+    
+    // 车轮（使用圆柱轮胎，仍然共享统一的管理逻辑）
+    const wheelRadius = 0.4;
+    const wheelThickness = 0.3;
+    const wheelMaterial = getTireMaterial();
+    
+    // 侧向位置：贴在车身外缘（车宽一半 + 轮胎厚度一半），略微突出
+    const sideOffset = carWidth * 0.5 + wheelThickness * 0.5;
+
+    // 四个车轮（轮胎中心高度为半径）
+    createLocalTire(x - carLength * 0.3, wheelRadius, z - sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+    createLocalTire(x + carLength * 0.3, wheelRadius, z - sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+    createLocalTire(x - carLength * 0.3, wheelRadius, z + sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+    createLocalTire(x + carLength * 0.3, wheelRadius, z + sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+
+    // 车身主体：放在轮胎上方，而不是直接贴地（下压 1/2 轮胎直径 = 半径）
+    const bodyCenterY = wheelRadius + carHeight / 2;
+    createLocalBox(x, bodyCenterY, z, carLength, carHeight, carWidth, carMaterial, 0);
+    
+    // 车顶（略小），放在车身之上
+    const roofLength = carLength * 0.7;
+    const roofWidth = carWidth * 0.9;
+    const roofHeight = 0.8;
+    const bodyTopY = bodyCenterY + carHeight / 2;
+    createLocalBox(x, bodyTopY + roofHeight / 2, z, roofLength, roofHeight, roofWidth, carMaterial, 0);
+}
+
+// 创建大卡车（rotation: 0=沿X轴, 1=沿Z轴）
+function createTruck(x, z, rotation = 0) {
+    // 卡车尺寸（比小汽车大）
+    let truckLength = 8.0;
+    let truckWidth = 2.5;
+    const truckHeight = 3.0;
+    
+    // 如果旋转90度，交换长宽
+    if (rotation === 1) {
+        [truckLength, truckWidth] = [truckWidth, truckLength];
+    }
+    
+    // 大车轮（使用圆柱轮胎）
+    const wheelRadius = 0.6;
+    const wheelThickness = 0.4;
+    const wheelMaterial = getTireMaterial();
+
+    // 侧向位置：贴在车身外缘（车宽一半 + 轮胎厚度一半）
+    const sideOffset = truckWidth * 0.5 + wheelThickness * 0.5;
+
+    // 前轮
+    createLocalTire(x - truckLength * 0.4, wheelRadius, z - sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+    createLocalTire(x - truckLength * 0.4, wheelRadius, z + sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+    
+    // 后轮（双排）
+    createLocalTire(x + truckLength * 0.2, wheelRadius, z - sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+    createLocalTire(x + truckLength * 0.3, wheelRadius, z - sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+    createLocalTire(x + truckLength * 0.2, wheelRadius, z + sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+    createLocalTire(x + truckLength * 0.3, wheelRadius, z + sideOffset, wheelRadius, wheelThickness, wheelMaterial, 0);
+
+    // 车头与货箱：放在轮胎上方，而不是直接贴地（整体压低一点）
+    const bodyBaseY = wheelRadius + 0.2; // 轮胎顶部略上方
+    const cabinHeight = truckHeight * 0.6;
+    const cargoHeight = truckHeight * 0.8;
+
+    // 车头（前部1/3）
+    const cabinLength = truckLength * 0.3;
+    const cabinCenterY = bodyBaseY + cabinHeight / 2;
+    ensureVehicleMaterials();
+    const cabinMat = state.mats.truckCab || state.mats.commercial;
+    createLocalBox(x - truckLength * 0.35, cabinCenterY, z, cabinLength, cabinHeight, truckWidth, cabinMat, 0);
+    
+    // 货箱（后部2/3）
+    const cargoLength = truckLength * 0.65;
+    const cargoCenterY = bodyBaseY + cargoHeight / 2;
+    const cargoMat = state.mats.truckCargo || state.mats.metalRoof;
+    createLocalBox(x + truckLength * 0.175, cargoCenterY, z, cargoLength, cargoHeight, truckWidth, cargoMat, 0);
+}
+
+
+// 将简单类型映射到现有材质
+function pickMaterialByType(type) {
+    switch (type) {
+        case 'residential': return state.mats.residential || state.mats.building;
+        case 'commercial':  return state.mats.commercial  || state.mats.building;
+        case 'industrial':  return state.mats.industrial  || state.mats.building;
+        case 'highrise':    return state.mats.modernGlass || state.mats.building;
+        default:            return state.mats.building;
+    }
+}
+
+// 手写地图构建
+function buildHandmadeCity() {
+    if (!currentMapConfig) {
+        console.warn('手写地图缺少 mapConfig');
+        return;
+    }
+
+    const { handmadeBuildings = [], roads = [], coverZones = [], environment = {}, bounds } = currentMapConfig;
+
+    // 1) 道路/地表
+    if (Array.isArray(roads)) {
+        roads.forEach(r => {
+            const mat =
+                r.material === 'road' ? state.mats.road :
+                r.material === 'park' ? state.mats.grass :
+                state.mats.road;
+            const h = r.height || 0.2;
+            createLocalBox(r.x || 0, h / 2, r.z || 0, r.width || 10, h, r.depth || 10, mat, 0);
+        });
+    }
+
+    // 2) 建筑
+    handmadeBuildings.forEach(b => {
+        const mat = pickMaterialByType(b.type);
+        const h = b.height || 10;
+        createLocalBox(b.x || 0, h / 2, b.z || 0, b.width || 10, h, b.depth || 10, mat, 0);
+    });
+
+    // 3) 掩体区域 - 简化处理：生成一些低矮掩体
+    if (Array.isArray(coverZones) && coverZones.length > 0) {
+        console.log(`🛡️ 生成 ${coverZones.length} 个掩体区域`);
+        coverZones.forEach(zone => {
+            const { x, z, radius, density, primaryType } = zone;
+            const coverCount = Math.floor((radius * radius * Math.PI) * (density || 0.3) / 100); // 简化计算
+            for (let i = 0; i < coverCount; i++) {
+                const angle = getRandom() * Math.PI * 2;
+                const r = getRandom() * radius;
+                const cx = x + Math.cos(angle) * r;
+                const cz = z + Math.sin(angle) * r;
+                
+                // 根据掩体类型生成不同高度的掩体
+                const coverHeight = primaryType === 'medium_cover' ? 2.5 : 1.2;
+                const coverSize = primaryType === 'medium_cover' ? 3 : 2;
+                createLocalBox(cx, coverHeight / 2, cz, coverSize, coverHeight, coverSize, state.mats.concrete, 0);
+            }
+        });
+    }
+
+    // 4) 环境装饰 - 沿街道有序放置
+    if (environment && bounds) {
+        const { treeDensity = 0, lampDensity = 0, carDensity = 0, propDensity = 0 } = environment;
+        const halfW = bounds.width / 2;
+        const halfD = bounds.depth / 2;
+        
+        // 街道宽度（用于计算路边位置）
+        const streetWidth = 12;
+        const sidewalkOffset = streetWidth / 2 + 3; // 人行道位置
+        
+        console.log(`🌳 生成环境装饰...`);
+        
+        // === 草地区域：四个街区内部 ===
+        const grassSize = 25;
+        createGrassArea(-50, -50, grassSize, grassSize); // 西北
+        createGrassArea(50, -50, grassSize, grassSize);  // 东北
+        createGrassArea(-50, 50, grassSize, grassSize);  // 西南
+        createGrassArea(50, 50, grassSize, grassSize);   // 东南
+
+        // === 挑战模式固定战利品箱子：四个街区各一个 ===
+        // 略微偏离草地区域中心，避免与建筑完全重叠
+        createChallengeTerminal(-55, -40, 'challenge_terminal_nw'); // 西北住宅区终端
+        createChallengeTerminal(55, -40, 'challenge_terminal_ne');  // 东北商业区终端
+        createChallengeTerminal(-55, 40, 'challenge_terminal_sw');  // 西南工业区终端
+        createChallengeTerminal(55, 40, 'challenge_terminal_se');   // 东南市政区终端
+        
+        // === 路灯：沿街道两侧整齐排列 ===
+        const lampSpacing = 20; // 路灯间距
+        // 东西主街两侧的路灯
+        for (let px = -halfW + 20; px < halfW - 10; px += lampSpacing) {
+            if (Math.abs(px) > streetWidth) { // 避开十字路口
+                createLamp(px, -sidewalkOffset, 3); // 北侧，灯朝南
+                createLamp(px, sidewalkOffset, 1);  // 南侧，灯朝北
+            }
+        }
+        // 南北主街两侧的路灯
+        for (let pz = -halfD + 20; pz < halfD - 10; pz += lampSpacing) {
+            if (Math.abs(pz) > streetWidth) { // 避开十字路口
+                createLamp(-sidewalkOffset, pz, 0); // 西侧，灯朝东
+                createLamp(sidewalkOffset, pz, 2);  // 东侧，灯朝西
+            }
+        }
+        
+        // === 车辆：沿街道方向停放 ===
+        const carSpacing = 8;
+        // 东西街道旁的车辆（沿X轴方向）
+        for (let px = -halfW + 30; px < halfW - 30; px += carSpacing + getRandom() * 5) {
+            if (Math.abs(px) > streetWidth + 5 && getRandom() < carDensity) {
+                const side = getRandom() < 0.5 ? -1 : 1;
+                const carZ = side * (sidewalkOffset + 4);
+                if (getRandom() < 0.7) {
+                    createCar(px, carZ, 'random', 0); // 沿X轴
+                } else {
+                    createTruck(px, carZ, 0);
+                }
+            }
+        }
+        // 南北街道旁的车辆（沿Z轴方向）
+        for (let pz = -halfD + 30; pz < halfD - 30; pz += carSpacing + getRandom() * 5) {
+            if (Math.abs(pz) > streetWidth + 5 && getRandom() < carDensity) {
+                const side = getRandom() < 0.5 ? -1 : 1;
+                const carX = side * (sidewalkOffset + 4);
+                if (getRandom() < 0.7) {
+                    createCar(carX, pz, 'random', 1); // 沿Z轴
+                } else {
+                    createTruck(carX, pz, 1);
+                }
+            }
+        }
+        
+        // === 树木：在草地区域和街角 ===
+        const treePositions = [
+            // 四个街区的绿化
+            [-55, -55], [-45, -55], [-55, -45],
+            [55, -55], [45, -55], [55, -45],
+            [-55, 55], [-45, 55], [-55, 45],
+            [55, 55], [45, 55], [55, 45],
+            // 中心广场四角
+            [-20, -20], [20, -20], [-20, 20], [20, 20]
+        ];
+        treePositions.forEach(([tx, tz]) => {
+            if (getRandom() < treeDensity * 2) {
+                createTree(tx + (getRandom() - 0.5) * 5, tz + (getRandom() - 0.5) * 5);
+            }
+        });
+        
+        // === 掩体箱子：在战术位置 ===
+        const cratePositions = [
+            [-30, 0], [30, 0], [0, -30], [0, 30],
+            [-60, -30], [60, -30], [-60, 30], [60, 30]
+        ];
+        cratePositions.forEach(([cx, cz]) => {
+            if (getRandom() < propDensity * 2) {
+                const crateSize = 0.8 + getRandom() * 0.4;
+                createStreetCrate(cx + (getRandom() - 0.5) * 3, cz + (getRandom() - 0.5) * 3, crateSize);
+            }
+        });
+    }
+
+    // 5) 围墙系统：四面墙 + 八个门洞
+    if (bounds) {
+        createBoundaryWalls(bounds);
+    }
+
+    // 6) 输出地图信息
+    if (bounds) {
+        console.log('📏 手写地图 bounds:', bounds);
+    }
+}
+
+// 创建边界围墙（四面墙，每面墙两个门洞）
+function createBoundaryWalls(bounds) {
+    const halfW = bounds.width / 2;
+    const halfD = bounds.depth / 2;
+    
+    // 围墙参数
+    const wallHeight = 8;       // 墙高 8 米
+    const wallThickness = 2;    // 墙厚 2 米
+    const gateWidth = 12;       // 门洞宽度 12 米
+    const wallOffset = 5;       // 墙距离地图边缘的内缩距离
+    
+    // 墙的实际位置（从边缘内缩一点）
+    const wallPosX = halfW - wallOffset;
+    const wallPosZ = halfD - wallOffset;
+    
+    // 门洞位置（每面墙两个门，分别在墙的 1/3 和 2/3 处）
+    const gateOffset1 = (halfW - wallOffset) * 0.5;  // 第一个门位置
+    const gateOffset2 = (halfW - wallOffset) * 0.5;  // 第二个门位置（对称）
+    
+    const wallMat = state.mats.concrete || state.mats.building;
+    
+    console.log(`🧱 创建边界围墙...`);
+    
+    // === 北墙 (z = -wallPosZ) ===
+    // 门洞在 x = -gateOffset1 和 x = +gateOffset1
+    const northGate1 = -gateOffset1;
+    const northGate2 = gateOffset1;
+    // 左段：从 -wallPosX 到 northGate1 - gateWidth/2
+    const northLeftEnd = northGate1 - gateWidth / 2;
+    const northLeftWidth = wallPosX + northLeftEnd;
+    if (northLeftWidth > 0) {
+        createLocalBox(-wallPosX + northLeftWidth / 2, wallHeight / 2, -wallPosZ, northLeftWidth, wallHeight, wallThickness, wallMat, 0);
+    }
+    // 中段：从 northGate1 + gateWidth/2 到 northGate2 - gateWidth/2
+    const northMidStart = northGate1 + gateWidth / 2;
+    const northMidEnd = northGate2 - gateWidth / 2;
+    const northMidWidth = northMidEnd - northMidStart;
+    if (northMidWidth > 0) {
+        createLocalBox((northMidStart + northMidEnd) / 2, wallHeight / 2, -wallPosZ, northMidWidth, wallHeight, wallThickness, wallMat, 0);
+    }
+    // 右段：从 northGate2 + gateWidth/2 到 wallPosX
+    const northRightStart = northGate2 + gateWidth / 2;
+    const northRightWidth = wallPosX - northRightStart;
+    if (northRightWidth > 0) {
+        createLocalBox(northRightStart + northRightWidth / 2, wallHeight / 2, -wallPosZ, northRightWidth, wallHeight, wallThickness, wallMat, 0);
+    }
+    
+    // === 南墙 (z = +wallPosZ) - 与北墙对称 ===
+    if (northLeftWidth > 0) {
+        createLocalBox(-wallPosX + northLeftWidth / 2, wallHeight / 2, wallPosZ, northLeftWidth, wallHeight, wallThickness, wallMat, 0);
+    }
+    if (northMidWidth > 0) {
+        createLocalBox((northMidStart + northMidEnd) / 2, wallHeight / 2, wallPosZ, northMidWidth, wallHeight, wallThickness, wallMat, 0);
+    }
+    if (northRightWidth > 0) {
+        createLocalBox(northRightStart + northRightWidth / 2, wallHeight / 2, wallPosZ, northRightWidth, wallHeight, wallThickness, wallMat, 0);
+    }
+    
+    // === 西墙 (x = -wallPosX) ===
+    const westGate1 = -gateOffset2;
+    const westGate2 = gateOffset2;
+    // 下段：从 -wallPosZ 到 westGate1 - gateWidth/2
+    const westBottomEnd = westGate1 - gateWidth / 2;
+    const westBottomLen = wallPosZ + westBottomEnd;
+    if (westBottomLen > 0) {
+        createLocalBox(-wallPosX, wallHeight / 2, -wallPosZ + westBottomLen / 2, wallThickness, wallHeight, westBottomLen, wallMat, 0);
+    }
+    // 中段
+    const westMidStart = westGate1 + gateWidth / 2;
+    const westMidEnd = westGate2 - gateWidth / 2;
+    const westMidLen = westMidEnd - westMidStart;
+    if (westMidLen > 0) {
+        createLocalBox(-wallPosX, wallHeight / 2, (westMidStart + westMidEnd) / 2, wallThickness, wallHeight, westMidLen, wallMat, 0);
+    }
+    // 上段
+    const westTopStart = westGate2 + gateWidth / 2;
+    const westTopLen = wallPosZ - westTopStart;
+    if (westTopLen > 0) {
+        createLocalBox(-wallPosX, wallHeight / 2, westTopStart + westTopLen / 2, wallThickness, wallHeight, westTopLen, wallMat, 0);
+    }
+    
+    // === 东墙 (x = +wallPosX) - 与西墙对称 ===
+    if (westBottomLen > 0) {
+        createLocalBox(wallPosX, wallHeight / 2, -wallPosZ + westBottomLen / 2, wallThickness, wallHeight, westBottomLen, wallMat, 0);
+    }
+    if (westMidLen > 0) {
+        createLocalBox(wallPosX, wallHeight / 2, (westMidStart + westMidEnd) / 2, wallThickness, wallHeight, westMidLen, wallMat, 0);
+    }
+    if (westTopLen > 0) {
+        createLocalBox(wallPosX, wallHeight / 2, westTopStart + westTopLen / 2, wallThickness, wallHeight, westTopLen, wallMat, 0);
+    }
+    
+    console.log(`🚪 围墙创建完成，8个门洞已留出`);
+    
+    // === 墙外地面（防止敌人掉入虚空）===
+    const outsideGroundSize = 30;  // 墙外地面延伸距离
+    const groundHeight = 0.2;
+    const groundMat = state.mats.road || state.mats.concrete;
+    
+    // 北侧墙外地面
+    createLocalBox(0, groundHeight / 2, -wallPosZ - outsideGroundSize / 2, 
+        bounds.width + outsideGroundSize * 2, groundHeight, outsideGroundSize, groundMat, 0);
+    // 南侧墙外地面
+    createLocalBox(0, groundHeight / 2, wallPosZ + outsideGroundSize / 2, 
+        bounds.width + outsideGroundSize * 2, groundHeight, outsideGroundSize, groundMat, 0);
+    // 西侧墙外地面
+    createLocalBox(-wallPosX - outsideGroundSize / 2, groundHeight / 2, 0, 
+        outsideGroundSize, groundHeight, bounds.depth, groundMat, 0);
+    // 东侧墙外地面
+    createLocalBox(wallPosX + outsideGroundSize / 2, groundHeight / 2, 0, 
+        outsideGroundSize, groundHeight, bounds.depth, groundMat, 0);
+    
+    console.log(`🏗️ 墙外地面创建完成`);
+}
+
 
 // 主要的城市场景生成函数
 export function generateCityScene() {
@@ -893,10 +1544,16 @@ export function generateCityScene() {
     
     // 清空静态物理网格引用，避免已销毁的 mesh 残留导致空气墙
     state.staticPhysicsMeshes.length = 0;
+
+    // 若存在手写地图配置，优先走手写渲染路径
+    if (currentMapConfig && Array.isArray(currentMapConfig.handmadeBuildings)) {
+        buildHandmadeCity();
+        console.log('✅ 手写城市场景生成完成！');
+        return;
+    }
     
-    // 每次生成城市时创建新的mapGenerator实例，确保新的随机种子
-    currentMapGenerator = createMapGenerator();
-    console.log(`🎲 新的地图生成器已创建，种子: ${currentMapGenerator.seed.toFixed(2)}`);
+    // 继续使用默认随机城市管线
+    console.log('🎲 使用默认随机城市生成');
     
     // 1. 创建道路网格
     createRoadGrid();
